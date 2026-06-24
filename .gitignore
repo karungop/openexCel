@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.dll
+build/
+dist/
+*.egg-info/
+.eggs/
+_skbuild/
+_cmake_test_compile/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+tests/fixtures/large_100k.xlsx

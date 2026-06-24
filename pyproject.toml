@@ -1,0 +1,17 @@
+[build-system]
+requires = ["scikit-build-core>=0.9"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "openexcel"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "High-performance C extension for reading and writing .xlsx files"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-benchmark", "openpyxl"]
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["src/openexcel"]
