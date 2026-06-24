@@ -3,7 +3,7 @@ requires = ["scikit-build-core>=0.9"]
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "openexcel"
+name = "openexcel-c"
 version = "0.1.0"
 description = "High-performance .xlsx reader/writer (C extension)"
 readme = "README.md"

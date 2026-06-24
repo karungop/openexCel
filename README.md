@@ -16,7 +16,7 @@ Typical speedups: **10–30× faster reads**, **5–15× faster writes** on 100k
 ## Installation
 
 ```bash
-pip install openexcel
+pip install openexcel-c
 ```
 
 Pre-built wheels are available for macOS (arm64, x86_64) and Linux (x86_64, aarch64) for Python 3.10–3.13.
@@ -32,7 +32,7 @@ brew install expat cmake
 # Ubuntu/Debian
 sudo apt-get install libexpat1-dev cmake
 
-pip install openexcel --no-binary openexcel
+pip install openexcel-c --no-binary openexcel-c
 ```
 
 ## Usage
