@@ -4,6 +4,7 @@
 #include "sst_writer.h"
 #include "sheet_writer.h"
 #include "../cell.h"
+#include "../styles.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -36,26 +37,7 @@ static const char RELS_TMPL[] =
       "Target=\"xl/workbook.xml\"/>"
     "</Relationships>";
 
-static const char STYLES_XML[] =
-    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
-    "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
-    "<numFmts count=\"1\">"
-      "<numFmt numFmtId=\"164\" formatCode=\"YYYY-MM-DD\"/>"
-    "</numFmts>"
-    "<fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>"
-    "<fills count=\"2\">"
-      "<fill><patternFill patternType=\"none\"/></fill>"
-      "<fill><patternFill patternType=\"gray125\"/></fill>"
-    "</fills>"
-    "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>"
-    "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>"
-    "<cellXfs count=\"2\">"
-      "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
-      "<xf numFmtId=\"164\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
-    "</cellXfs>"
-    "</styleSheet>";
-/* xf index 0 = general, xf index 1 = date (numFmtId 164 = YYYY-MM-DD) */
-#define DATE_XF_IDX 1
+/* styles.xml is now generated dynamically by oxl_write_styles() */
 
 static void intern_worksheet_strings(OxlWorkbook *wb, OxlWorksheet *ws) {
     for (uint32_t i = 0; i < ws->cell_count; i++) {
@@ -145,14 +127,15 @@ int oxl_write_workbook(OxlWorkbook *wb, const char *path,
     ADD("xl/sharedStrings.xml");
 
     /* 6. xl/styles.xml */
-    oxl_xmlbuf_cstr(&b, STYLES_XML);
+    oxl_styles_init_write_defaults(&wb->styles);
+    oxl_write_styles(&b, &wb->styles);
     ADD("xl/styles.xml");
 
     /* 7. xl/worksheets/sheetN.xml */
     for (uint32_t i = 0; i < wb->sheet_count; i++) {
         char entry[64];
         snprintf(entry, sizeof(entry), "xl/worksheets/sheet%u.xml", i + 1);
-        oxl_write_sheet(&b, wb->sheets[i], wb, DATE_XF_IDX);
+        oxl_write_sheet(&b, wb->sheets[i], wb, 1);
         ADD(entry);
     }
 
