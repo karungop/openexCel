@@ -17,6 +17,7 @@
 static PyTypeObject PyWorkbookType;
 static PyTypeObject PyWorksheetType;
 static PyTypeObject PyRowIteratorType;
+static PyTypeObject PyXlCellType;
 
 /* ========== PyWorkbookObject ========== */
 
@@ -48,6 +49,75 @@ typedef struct {
     uint16_t      min_col;
     uint16_t      max_col;
 } PyRowIteratorObject;
+
+/* ========== PyXlCellObject ========== */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject    *owner_ws;  /* ref to PyWorksheetObject to keep C data alive */
+    OxlWorksheet *ws;
+    OxlWorkbook  *wb;
+    uint32_t      row;     /* 0-based */
+    uint16_t      col;     /* 0-based */
+} PyXlCellObject;
+
+/* ========== Column letter utilities ========== */
+
+/* "A" -> 1, "Z" -> 26, "AA" -> 27, "AZ" -> 52, "AAA" -> 703
+   Input: uppercase column string. Returns 0 on error. */
+static int col_str_to_idx(const char *s) {
+    if (!s || !*s) return 0;
+    int result = 0;
+    for (; *s; s++) {
+        if (*s < 'A' || *s > 'Z') return 0;
+        result = result * 26 + (*s - 'A' + 1);
+    }
+    return result;
+}
+
+/* 1 -> "A", 26 -> "Z", 27 -> "AA". buf must be >= 5 bytes. Null-terminates. */
+static void col_idx_to_str(int idx, char *buf) {
+    char tmp[8];
+    int len = 0;
+    while (idx > 0) {
+        int rem = (idx - 1) % 26;
+        tmp[len++] = (char)('A' + rem);
+        idx = (idx - 1) / 26;
+    }
+    /* reverse */
+    for (int i = 0; i < len; i++)
+        buf[i] = tmp[len - 1 - i];
+    buf[len] = '\0';
+}
+
+/* Parse "A1" or "AA10" into 0-based row and col. Returns 0 on success. */
+static int parse_a1_ref(const char *ref, uint32_t *row, uint16_t *col) {
+    if (!ref || !*ref) return -1;
+    /* Read letters */
+    const char *p = ref;
+    while (*p && *p >= 'A' && *p <= 'Z') p++;
+    if (p == ref) return -1;  /* no letters */
+    if (!*p) return -1;       /* no digits */
+
+    /* col string */
+    char col_str[8];
+    size_t col_len = (size_t)(p - ref);
+    if (col_len >= sizeof(col_str)) return -1;
+    memcpy(col_str, ref, col_len);
+    col_str[col_len] = '\0';
+
+    int col_idx = col_str_to_idx(col_str);
+    if (col_idx <= 0) return -1;
+
+    /* row number */
+    char *end;
+    long row_num = strtol(p, &end, 10);
+    if (end == p || *end != '\0' || row_num <= 0) return -1;
+
+    *row = (uint32_t)(row_num - 1);  /* 0-based */
+    *col = (uint16_t)(col_idx - 1);  /* 0-based */
+    return 0;
+}
 
 /* ========== Helper: OxlCell → Python object ========== */
 
@@ -86,6 +156,160 @@ static PyObject *cell_to_python(const OxlCell *c, OxlWorkbook *wb) {
     default:
         Py_RETURN_NONE;
     }
+}
+
+/* ========== Cell find / set helpers ========== */
+
+/* Key used for sorting and binary search: row-major */
+static inline uint64_t cell_key(uint32_t row, uint16_t col) {
+    return ((uint64_t)row << 16) | (uint64_t)col;
+}
+
+/* Binary search ws->cells for (row, col). Returns pointer or NULL. */
+static OxlCell *ws_find_cell(OxlWorksheet *ws, uint32_t row, uint16_t col) {
+    if (!ws->cells || ws->cell_count == 0) return NULL;
+    uint64_t key = cell_key(row, col);
+    uint32_t lo = 0, hi = ws->cell_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        uint64_t mk = cell_key(ws->cells[mid].row, ws->cells[mid].col);
+        if (mk == key) return &ws->cells[mid];
+        if (mk < key)  lo = mid + 1;
+        else           hi = mid;
+    }
+    return NULL;
+}
+
+/* Find insertion position for (row, col) — returns index where cell should go. */
+static uint32_t ws_find_pos(OxlWorksheet *ws, uint32_t row, uint16_t col) {
+    if (!ws->cells || ws->cell_count == 0) return 0;
+    uint64_t key = cell_key(row, col);
+    uint32_t lo = 0, hi = ws->cell_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        uint64_t mk = cell_key(ws->cells[mid].row, ws->cells[mid].col);
+        if (mk < key) lo = mid + 1;
+        else          hi = mid;
+    }
+    return lo;
+}
+
+/* Free inline string data from a cell if applicable. */
+static void cell_free_inline(OxlCell *c) {
+    if (c->type == OXL_CELL_INLINE_STR || c->type == OXL_CELL_ERROR) {
+        free(c->v.s_inline);
+        c->v.s_inline = NULL;
+    }
+}
+
+/* Set a cell at (row, col). If it exists, update type+value. If not, insert sorted.
+   Returns 0 on success, -1 on error. */
+static int ws_set_cell(OxlWorksheet *ws, OxlWorkbook *wb, uint32_t row, uint16_t col,
+                       PyObject *value) {
+    /* Build the cell value */
+    OxlCell newc;
+    memset(&newc, 0, sizeof(newc));
+    newc.row = row;
+    newc.col = col;
+
+    if (value == Py_None) {
+        newc.type = OXL_CELL_EMPTY;
+    } else if (PyBool_Check(value)) {
+        newc.type = OXL_CELL_BOOL;
+        newc.v.b  = (value == Py_True) ? 1 : 0;
+    } else if (PyLong_Check(value)) {
+        newc.type = OXL_CELL_FLOAT;
+        newc.v.f  = PyLong_AsDouble(value);
+        if (newc.v.f == -1.0 && PyErr_Occurred()) return -1;
+    } else if (PyFloat_Check(value)) {
+        newc.type = OXL_CELL_FLOAT;
+        newc.v.f  = PyFloat_AsDouble(value);
+        if (newc.v.f == -1.0 && PyErr_Occurred()) return -1;
+    } else if (PyUnicode_Check(value)) {
+        const char *s = PyUnicode_AsUTF8(value);
+        if (!s) return -1;
+        if (s[0] == '=') {
+            /* Formula: store as inline string (formula placeholder) */
+            char *dup = strdup(s + 1);
+            if (!dup) { PyErr_NoMemory(); return -1; }
+            newc.type = OXL_CELL_INLINE_STR;
+            newc.v.s_inline = dup;
+        } else {
+            uint32_t idx = oxl_sst_intern(&wb->sst, s);
+            newc.type    = OXL_CELL_STRING;
+            newc.v.s_idx = idx;
+        }
+    } else if (PyDateTime_Check(value)) {
+        OxlDate d = {0};
+        d.year  = (int16_t)PyDateTime_GET_YEAR(value);
+        d.month = (uint8_t)PyDateTime_GET_MONTH(value);
+        d.day   = (uint8_t)PyDateTime_GET_DAY(value);
+        d.hour  = (uint8_t)PyDateTime_DATE_GET_HOUR(value);
+        d.min   = (uint8_t)PyDateTime_DATE_GET_MINUTE(value);
+        d.sec   = (uint8_t)PyDateTime_DATE_GET_SECOND(value);
+        d.usec  = (uint32_t)PyDateTime_DATE_GET_MICROSECOND(value);
+        newc.type = OXL_CELL_DATE;
+        newc.v.dt = d;
+    } else if (PyDate_Check(value)) {
+        OxlDate d = {0};
+        d.year  = (int16_t)PyDateTime_GET_YEAR(value);
+        d.month = (uint8_t)PyDateTime_GET_MONTH(value);
+        d.day   = (uint8_t)PyDateTime_GET_DAY(value);
+        newc.type = OXL_CELL_DATE;
+        newc.v.dt = d;
+    } else {
+        /* Fallback: convert to string */
+        PyObject *str_obj = PyObject_Str(value);
+        if (!str_obj) return -1;
+        const char *s = PyUnicode_AsUTF8(str_obj);
+        if (!s) { Py_DECREF(str_obj); return -1; }
+        uint32_t idx = oxl_sst_intern(&wb->sst, s);
+        Py_DECREF(str_obj);
+        newc.type    = OXL_CELL_STRING;
+        newc.v.s_idx = idx;
+    }
+
+    /* Try to find existing cell */
+    uint32_t pos = ws_find_pos(ws, row, col);
+    if (pos < ws->cell_count) {
+        uint64_t ek = cell_key(ws->cells[pos].row, ws->cells[pos].col);
+        if (ek == cell_key(row, col)) {
+            /* Found: update in place */
+            cell_free_inline(&ws->cells[pos]);
+            ws->cells[pos].type = newc.type;
+            ws->cells[pos].v    = newc.v;
+            return 0;
+        }
+    }
+
+    /* Not found: insert at pos */
+    if (newc.type == OXL_CELL_EMPTY) {
+        /* Nothing to insert for empty cells that don't exist */
+        return 0;
+    }
+
+    /* Grow if needed */
+    if (ws->cell_count >= ws->cell_capacity) {
+        uint32_t new_cap = ws->cell_capacity == 0 ? 8 : ws->cell_capacity * 2;
+        OxlCell *new_cells = (OxlCell *)realloc(ws->cells, new_cap * sizeof(OxlCell));
+        if (!new_cells) { PyErr_NoMemory(); return -1; }
+        ws->cells = new_cells;
+        ws->cell_capacity = new_cap;
+    }
+
+    /* Shift cells to make room */
+    if (pos < ws->cell_count) {
+        memmove(&ws->cells[pos + 1], &ws->cells[pos],
+                (ws->cell_count - pos) * sizeof(OxlCell));
+    }
+    ws->cells[pos] = newc;
+    ws->cell_count++;
+
+    /* Update row_count and col_count */
+    if (row + 1 > ws->row_count) ws->row_count = row + 1;
+    if ((uint32_t)col + 1 > ws->col_count) ws->col_count = (uint32_t)col + 1;
+
+    return 0;
 }
 
 /* ========== PyRowIteratorType ========== */
@@ -152,6 +376,92 @@ static PyTypeObject PyRowIteratorType = {
     .tp_flags     = Py_TPFLAGS_DEFAULT,
 };
 
+/* ========== PyXlCellType ========== */
+
+static void cell_dealloc(PyXlCellObject *self) {
+    Py_XDECREF(self->owner_ws);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *cell_get_value(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    if (!c) Py_RETURN_NONE;
+    return cell_to_python(c, self->wb);
+}
+
+static int cell_set_value(PyXlCellObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) {
+        PyErr_SetString(PyExc_TypeError, "Cannot delete cell value");
+        return -1;
+    }
+    return ws_set_cell(self->ws, self->wb, self->row, self->col, value);
+}
+
+static PyObject *cell_get_row(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromUnsignedLong((unsigned long)(self->row + 1));
+}
+
+static PyObject *cell_get_column(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromUnsignedLong((unsigned long)(self->col + 1));
+}
+
+static PyObject *cell_get_coordinate(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    char col_str[8];
+    col_idx_to_str((int)(self->col + 1), col_str);
+    char coord[32];
+    snprintf(coord, sizeof(coord), "%s%u", col_str, self->row + 1);
+    return PyUnicode_FromString(coord);
+}
+
+static PyObject *cell_get_column_letter(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    char col_str[8];
+    col_idx_to_str((int)(self->col + 1), col_str);
+    return PyUnicode_FromString(col_str);
+}
+
+static PyObject *cell_get_data_type(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    if (!c || c->type == OXL_CELL_EMPTY) return PyUnicode_FromString("n");
+    switch (c->type) {
+    case OXL_CELL_FLOAT:      return PyUnicode_FromString("n");
+    case OXL_CELL_STRING:     return PyUnicode_FromString("s");
+    case OXL_CELL_INLINE_STR: return PyUnicode_FromString("s");
+    case OXL_CELL_BOOL:       return PyUnicode_FromString("b");
+    case OXL_CELL_DATE:       return PyUnicode_FromString("d");
+    case OXL_CELL_ERROR:      return PyUnicode_FromString("e");
+    default:                  return PyUnicode_FromString("n");
+    }
+}
+
+static PyObject *cell_repr(PyXlCellObject *self) {
+    char col_str[8];
+    col_idx_to_str((int)(self->col + 1), col_str);
+    char coord[32];
+    snprintf(coord, sizeof(coord), "%s%u", col_str, self->row + 1);
+    const char *sheet_name = self->ws->name ? self->ws->name : "";
+    return PyUnicode_FromFormat("<Cell '%s'.%s>", sheet_name, coord);
+}
+
+static PyGetSetDef cell_getset[] = {
+    {"value",         (getter)cell_get_value,         (setter)cell_set_value, "Cell value", NULL},
+    {"row",           (getter)cell_get_row,            NULL, "Row number (1-based)", NULL},
+    {"column",        (getter)cell_get_column,         NULL, "Column number (1-based)", NULL},
+    {"coordinate",    (getter)cell_get_coordinate,     NULL, "Cell coordinate (e.g. 'A1')", NULL},
+    {"column_letter", (getter)cell_get_column_letter,  NULL, "Column letter (e.g. 'A')", NULL},
+    {"data_type",     (getter)cell_get_data_type,      NULL, "Data type character", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyXlCellType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.Cell",
+    .tp_basicsize = sizeof(PyXlCellObject),
+    .tp_dealloc   = (destructor)cell_dealloc,
+    .tp_repr      = (reprfunc)cell_repr,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_getset    = cell_getset,
+};
+
 /* ========== PyWorksheetType ========== */
 
 static PyRowIteratorObject *
@@ -170,6 +480,18 @@ make_row_iter(PyWorksheetObject *ws_obj, uint32_t min_row, uint32_t max_row,
     it->min_col  = min_col;
     it->max_col  = max_col;
     return it;
+}
+
+static PyXlCellObject *make_cell_obj(PyWorksheetObject *ws_obj, uint32_t row, uint16_t col) {
+    PyXlCellObject *obj = PyObject_New(PyXlCellObject, &PyXlCellType);
+    if (!obj) return NULL;
+    Py_INCREF(ws_obj);
+    obj->owner_ws = (PyObject *)ws_obj;
+    obj->ws = ws_obj->ws;
+    obj->wb = ws_obj->wb;
+    obj->row = row;
+    obj->col = col;
+    return obj;
 }
 
 static PyObject *worksheet_iter(PyWorksheetObject *self, PyObject *Py_UNUSED(args)) {
@@ -260,6 +582,100 @@ static PyObject *worksheet_append(PyWorksheetObject *self, PyObject *arg) {
     Py_RETURN_NONE;
 }
 
+/* worksheet_subscript: supports ws['A1'], ws['A1:C3'], ws[(row, col)] */
+static PyObject *worksheet_subscript(PyWorksheetObject *self, PyObject *key) {
+    if (PyUnicode_Check(key)) {
+        const char *ref = PyUnicode_AsUTF8(key);
+        if (!ref) return NULL;
+
+        /* Check for range: contains ':' */
+        const char *colon = strchr(ref, ':');
+        if (colon) {
+            /* Range: parse "A1:C3" */
+            /* Split at colon */
+            size_t start_len = (size_t)(colon - ref);
+            char start_ref[32], end_ref[32];
+            if (start_len >= sizeof(start_ref) || strlen(colon + 1) >= sizeof(end_ref)) {
+                PyErr_SetString(PyExc_ValueError, "Cell reference too long");
+                return NULL;
+            }
+            memcpy(start_ref, ref, start_len);
+            start_ref[start_len] = '\0';
+            strcpy(end_ref, colon + 1);
+
+            uint32_t min_row, max_row;
+            uint16_t min_col, max_col;
+            if (parse_a1_ref(start_ref, &min_row, &min_col) < 0 ||
+                parse_a1_ref(end_ref, &max_row, &max_col) < 0) {
+                PyErr_Format(PyExc_ValueError, "Invalid range reference: %s", ref);
+                return NULL;
+            }
+
+            /* Ensure min <= max */
+            if (min_row > max_row) { uint32_t t = min_row; min_row = max_row; max_row = t; }
+            if (min_col > max_col) { uint16_t t = min_col; min_col = max_col; max_col = t; }
+
+            uint32_t nrows = max_row - min_row + 1;
+            uint32_t ncols = (uint32_t)(max_col - min_col + 1);
+
+            PyObject *outer = PyTuple_New((Py_ssize_t)nrows);
+            if (!outer) return NULL;
+
+            for (uint32_t r = 0; r < nrows; r++) {
+                PyObject *inner = PyTuple_New((Py_ssize_t)ncols);
+                if (!inner) { Py_DECREF(outer); return NULL; }
+                for (uint32_t c = 0; c < ncols; c++) {
+                    PyXlCellObject *cell = make_cell_obj(self,
+                        min_row + r, (uint16_t)(min_col + c));
+                    if (!cell) { Py_DECREF(inner); Py_DECREF(outer); return NULL; }
+                    PyTuple_SET_ITEM(inner, (Py_ssize_t)c, (PyObject *)cell);
+                }
+                PyTuple_SET_ITEM(outer, (Py_ssize_t)r, inner);
+            }
+            return outer;
+        } else {
+            /* Single cell reference */
+            uint32_t row;
+            uint16_t col;
+            if (parse_a1_ref(ref, &row, &col) < 0) {
+                PyErr_Format(PyExc_ValueError, "Invalid cell reference: %s", ref);
+                return NULL;
+            }
+            return (PyObject *)make_cell_obj(self, row, col);
+        }
+    } else if (PyTuple_Check(key) && PyTuple_Size(key) == 2) {
+        /* Tuple (row, col), 1-based */
+        PyObject *row_obj = PyTuple_GET_ITEM(key, 0);
+        PyObject *col_obj = PyTuple_GET_ITEM(key, 1);
+        if (!PyLong_Check(row_obj) || !PyLong_Check(col_obj)) {
+            PyErr_SetString(PyExc_TypeError, "Tuple key must be (int, int)");
+            return NULL;
+        }
+        long r = PyLong_AsLong(row_obj);
+        long c = PyLong_AsLong(col_obj);
+        if (r < 1 || c < 1) {
+            PyErr_SetString(PyExc_ValueError, "Row and column must be >= 1");
+            return NULL;
+        }
+        return (PyObject *)make_cell_obj(self, (uint32_t)(r - 1), (uint16_t)(c - 1));
+    } else {
+        PyErr_SetString(PyExc_TypeError, "Worksheet key must be a string or (row, col) tuple");
+        return NULL;
+    }
+}
+
+static PyObject *worksheet_cell(PyWorksheetObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"row", "column", NULL};
+    int row = 1, col = 1;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|ii", kwlist, &row, &col))
+        return NULL;
+    if (row < 1 || col < 1) {
+        PyErr_SetString(PyExc_ValueError, "row and column must be >= 1");
+        return NULL;
+    }
+    return (PyObject *)make_cell_obj(self, (uint32_t)(row - 1), (uint16_t)(col - 1));
+}
+
 static PyObject *worksheet_get_max_row(PyWorksheetObject *self, void *Py_UNUSED(x)) {
     return PyLong_FromUnsignedLong(self->ws->row_count);
 }
@@ -282,6 +698,7 @@ static PyMethodDef worksheet_methods[] = {
     {"__iter__",  (PyCFunction)worksheet_iter,      METH_NOARGS,   "Iterate rows"},
     {"iter_rows", (PyCFunction)(void(*)(void))worksheet_iter_rows, METH_VARARGS|METH_KEYWORDS, "iter_rows(min_row=0, max_row=-1, min_col=0, max_col=-1)"},
     {"append",    (PyCFunction)worksheet_append,    METH_O,        "Append a row"},
+    {"cell",      (PyCFunction)(void(*)(void))worksheet_cell, METH_VARARGS|METH_KEYWORDS, "cell(row=1, column=1)"},
     {NULL, NULL}
 };
 
@@ -290,6 +707,10 @@ static PyGetSetDef worksheet_getset[] = {
     {"max_column", (getter)worksheet_get_max_col, NULL, "Number of columns", NULL},
     {"title",      (getter)worksheet_get_title,   NULL, "Sheet name", NULL},
     {NULL}
+};
+
+static PyMappingMethods worksheet_mapping = {
+    .mp_subscript = (binaryfunc)worksheet_subscript,
 };
 
 static PyTypeObject PyWorksheetType = {
@@ -301,6 +722,7 @@ static PyTypeObject PyWorksheetType = {
     .tp_methods   = worksheet_methods,
     .tp_getset    = worksheet_getset,
     .tp_iter      = (getiterfunc)(void(*)(void))worksheet_iter,
+    .tp_as_mapping = &worksheet_mapping,
 };
 
 /* ========== PyWorkbookType ========== */
@@ -449,10 +871,43 @@ static PyObject *m_load_workbook(PyObject *Py_UNUSED(mod), PyObject *args) {
     return (PyObject *)obj;
 }
 
+/* ========== Module-level column utilities ========== */
+
+static PyObject *m_column_index_from_string(PyObject *Py_UNUSED(mod), PyObject *args) {
+    const char *s;
+    if (!PyArg_ParseTuple(args, "s", &s)) return NULL;
+    /* Convert to uppercase */
+    char upper[16];
+    size_t i;
+    for (i = 0; s[i] && i < sizeof(upper) - 1; i++)
+        upper[i] = (char)(s[i] >= 'a' && s[i] <= 'z' ? s[i] - 32 : s[i]);
+    upper[i] = '\0';
+    int idx = col_str_to_idx(upper);
+    if (idx <= 0) {
+        PyErr_Format(PyExc_ValueError, "Invalid column string: %s", s);
+        return NULL;
+    }
+    return PyLong_FromLong(idx);
+}
+
+static PyObject *m_get_column_letter(PyObject *Py_UNUSED(mod), PyObject *args) {
+    int idx;
+    if (!PyArg_ParseTuple(args, "i", &idx)) return NULL;
+    if (idx <= 0) {
+        PyErr_Format(PyExc_ValueError, "Column index must be >= 1, got %d", idx);
+        return NULL;
+    }
+    char buf[8];
+    col_idx_to_str(idx, buf);
+    return PyUnicode_FromString(buf);
+}
+
 /* ========== Module definition ========== */
 
 static PyMethodDef module_methods[] = {
-    {"load_workbook", m_load_workbook, METH_VARARGS, "load_workbook(path) -> Workbook"},
+    {"load_workbook",             m_load_workbook,             METH_VARARGS, "load_workbook(path) -> Workbook"},
+    {"column_index_from_string",  m_column_index_from_string,  METH_VARARGS, "column_index_from_string(s) -> int"},
+    {"get_column_letter",         m_get_column_letter,         METH_VARARGS, "get_column_letter(idx) -> str"},
     {NULL, NULL}
 };
 
@@ -468,8 +923,9 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     PyDateTime_IMPORT;
 
     if (PyType_Ready(&PyRowIteratorType) < 0) return NULL;
-    if (PyType_Ready(&PyWorksheetType) < 0)  return NULL;
-    if (PyType_Ready(&PyWorkbookType) < 0)   return NULL;
+    if (PyType_Ready(&PyXlCellType) < 0)        return NULL;
+    if (PyType_Ready(&PyWorksheetType) < 0)   return NULL;
+    if (PyType_Ready(&PyWorkbookType) < 0)    return NULL;
 
     PyObject *mod = PyModule_Create(&moduledef);
     if (!mod) return NULL;
@@ -477,6 +933,13 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     Py_INCREF(&PyWorkbookType);
     if (PyModule_AddObject(mod, "Workbook", (PyObject *)&PyWorkbookType) < 0) {
         Py_DECREF(&PyWorkbookType);
+        Py_DECREF(mod);
+        return NULL;
+    }
+
+    Py_INCREF(&PyXlCellType);
+    if (PyModule_AddObject(mod, "Cell", (PyObject *)&PyXlCellType) < 0) {
+        Py_DECREF(&PyXlCellType);
         Py_DECREF(mod);
         return NULL;
     }
