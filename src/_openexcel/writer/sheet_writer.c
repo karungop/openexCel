@@ -123,51 +123,87 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
             const OxlCell *c = &ws->cells[i];
             i++;
 
-            if (c->type == OXL_CELL_EMPTY) continue;
+            if (c->type == OXL_CELL_EMPTY && !c->formula) continue;
 
+            /* Open <c> tag with r= attribute */
             oxl_xmlbuf_cstr(b, "<c r=\"");
             emit_cell_ref(b, c->row, c->col);
             oxl_xmlbuf_raw(b, "\"", 1);
 
+            /* Type attribute (t=) */
             switch (c->type) {
             case OXL_CELL_STRING:
             case OXL_CELL_INLINE_STR:
-                oxl_xmlbuf_cstr(b, " t=\"s\"><v>");
-                if (c->type == OXL_CELL_STRING) {
-                    oxl_xmlbuf_uint(b, c->v.s_idx);
-                } else {
-                    /* inline str was already interned during write prep */
-                    oxl_xmlbuf_uint(b, c->v.s_idx);
-                }
-                oxl_xmlbuf_cstr(b, "</v></c>");
+                oxl_xmlbuf_cstr(b, " t=\"s\"");
                 break;
             case OXL_CELL_BOOL:
-                oxl_xmlbuf_cstr(b, " t=\"b\"><v>");
+                oxl_xmlbuf_cstr(b, " t=\"b\"");
+                break;
+            case OXL_CELL_ERROR:
+                oxl_xmlbuf_cstr(b, " t=\"e\"");
+                break;
+            case OXL_CELL_DATE:
+                /* style attribute for dates */
+                oxl_xmlbuf_cstr(b, " s=\"");
+                oxl_xmlbuf_uint(b, c->style_idx > 0 ? c->style_idx : date_xf_idx);
+                oxl_xmlbuf_raw(b, "\"", 1);
+                break;
+            default:
+                /* style attribute if set */
+                if (c->style_idx > 0) {
+                    oxl_xmlbuf_cstr(b, " s=\"");
+                    oxl_xmlbuf_uint(b, c->style_idx);
+                    oxl_xmlbuf_raw(b, "\"", 1);
+                }
+                break;
+            }
+
+            /* Close opening tag */
+            oxl_xmlbuf_raw(b, ">", 1);
+
+            /* Formula element (must come before <v> per OOXML spec) */
+            if (c->formula) {
+                oxl_xmlbuf_cstr(b, "<f>");
+                oxl_xmlbuf_text(b, c->formula);
+                oxl_xmlbuf_cstr(b, "</f>");
+            }
+
+            /* Value element (type-specific content) */
+            switch (c->type) {
+            case OXL_CELL_STRING:
+            case OXL_CELL_INLINE_STR:
+                oxl_xmlbuf_cstr(b, "<v>");
+                oxl_xmlbuf_uint(b, c->v.s_idx);
+                oxl_xmlbuf_cstr(b, "</v>");
+                break;
+            case OXL_CELL_BOOL:
+                oxl_xmlbuf_cstr(b, "<v>");
                 oxl_xmlbuf_raw(b, c->v.b ? "1" : "0", 1);
-                oxl_xmlbuf_cstr(b, "</v></c>");
+                oxl_xmlbuf_cstr(b, "</v>");
                 break;
             case OXL_CELL_FLOAT:
-                oxl_xmlbuf_cstr(b, "><v>");
+                oxl_xmlbuf_cstr(b, "<v>");
                 oxl_xmlbuf_double(b, c->v.f);
-                oxl_xmlbuf_cstr(b, "</v></c>");
+                oxl_xmlbuf_cstr(b, "</v>");
                 break;
             case OXL_CELL_DATE: {
                 double serial = oxl_date_to_serial(c->v.dt, wb->date1904);
-                oxl_xmlbuf_cstr(b, " s=\"");
-                oxl_xmlbuf_uint(b, date_xf_idx);
-                oxl_xmlbuf_cstr(b, "\"><v>");
+                oxl_xmlbuf_cstr(b, "<v>");
                 oxl_xmlbuf_double(b, serial);
-                oxl_xmlbuf_cstr(b, "</v></c>");
+                oxl_xmlbuf_cstr(b, "</v>");
                 break;
             }
             case OXL_CELL_ERROR:
-                oxl_xmlbuf_cstr(b, " t=\"e\"><v>");
+                oxl_xmlbuf_cstr(b, "<v>");
                 oxl_xmlbuf_text(b, c->v.s_inline ? c->v.s_inline : "#ERR!");
-                oxl_xmlbuf_cstr(b, "</v></c>");
+                oxl_xmlbuf_cstr(b, "</v>");
                 break;
             default:
+                /* OXL_CELL_EMPTY with formula: no <v> element */
                 break;
             }
+
+            oxl_xmlbuf_cstr(b, "</c>");
         }
         oxl_xmlbuf_cstr(b, "</row>");
     }

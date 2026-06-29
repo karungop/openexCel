@@ -26,6 +26,7 @@ typedef struct {
     uint16_t     col;       /* 0-based */
     uint16_t     style_idx;
     OxlCellType  type;
+    char        *formula;   /* NULL if no formula; owned heap string, raw expression WITHOUT '=' prefix */
     union {
         double   f;         /* OXL_CELL_FLOAT */
         uint32_t s_idx;     /* OXL_CELL_STRING: index into OxlStringTable */

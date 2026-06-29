@@ -41,6 +41,12 @@ typedef struct {
     char         *cbuf;     /* points to stack_buf or heap_buf */
     size_t        cbuf_len;
     size_t        cbuf_cap;
+    /* formula buffer (separate from cbuf so <v> can follow <f>) */
+    char          formula_stack[CBUF_STACK];
+    char         *formula_heap;
+    char         *formula_buf;  /* points to formula_stack or formula_heap */
+    size_t        formula_len;
+    size_t        formula_cap;
     /* rich inline string accumulator */
     char         *rich_buf;
     size_t        rich_len;
@@ -84,6 +90,26 @@ static void cbuf_append(SheetCtx *c, const char *s, int n) {
     c->cbuf_len += (size_t)n;
 }
 
+static void formula_buf_reset(SheetCtx *c) {
+    c->formula_buf = c->formula_stack;
+    c->formula_len = 0;
+    c->formula_cap = CBUF_STACK;
+}
+
+static void formula_buf_append(SheetCtx *c, const char *s, int n) {
+    if ((size_t)n + c->formula_len >= c->formula_cap) {
+        size_t newcap = c->formula_cap * 2 + (size_t)n;
+        char *p = realloc(c->formula_buf == c->formula_stack ? NULL : c->formula_heap, newcap);
+        if (!p) { c->error = 1; return; }
+        if (c->formula_buf == c->formula_stack) memcpy(p, c->formula_stack, c->formula_len);
+        c->formula_heap = p;
+        c->formula_buf  = p;
+        c->formula_cap  = newcap;
+    }
+    memcpy(c->formula_buf + c->formula_len, s, (size_t)n);
+    c->formula_len += (size_t)n;
+}
+
 static void rich_append(SheetCtx *c, const char *s, size_t n) {
     if (c->rich_len + n >= c->rich_cap) {
         size_t newcap = c->rich_cap ? c->rich_cap * 2 + n : 256;
@@ -97,7 +123,7 @@ static void rich_append(SheetCtx *c, const char *s, size_t n) {
 }
 
 static void emit_cell(SheetCtx *c) {
-    if (c->cbuf_len == 0 && !c->cur_is_inline) return;
+    if (c->cbuf_len == 0 && !c->cur_is_inline && c->formula_len == 0) return;
 
     OxlCell cell;
     memset(&cell, 0, sizeof(cell));
@@ -105,10 +131,19 @@ static void emit_cell(SheetCtx *c) {
     cell.col       = c->cur_col;
     cell.style_idx = c->cur_style;
 
+    /* capture formula if present (raw expression without '=' prefix) */
+    if (c->formula_len > 0) {
+        if (c->formula_len < c->formula_cap) c->formula_buf[c->formula_len] = '\0';
+        cell.formula = strndup(c->formula_buf, c->formula_len);
+    }
+
     /* null-terminate cbuf */
     if (c->cbuf_len < c->cbuf_cap) c->cbuf[c->cbuf_len] = '\0';
 
-    if (c->cur_is_inline) {
+    if (c->cbuf_len == 0 && !c->cur_is_inline) {
+        /* Formula with no cached <v> value — store as EMPTY with formula */
+        cell.type = OXL_CELL_EMPTY;
+    } else if (c->cur_is_inline) {
         /* inline string: copy rich_buf or cbuf */
         const char *text = c->rich_len ? c->rich_buf : c->cbuf;
         size_t tlen = c->rich_len ? c->rich_len : c->cbuf_len;
@@ -309,7 +344,7 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
     if (strcmp(name, "v") == 0 && c->state == SS_VALUE) {
         c->state = SS_CELL;
     } else if (strcmp(name, "f") == 0 && c->state == SS_FORMULA) {
-        cbuf_reset(c);
+        /* formula text accumulated in formula_buf; keep it for emit_cell */
         c->state = SS_CELL;
     } else if (strcmp(name, "t") == 0 && c->state == SS_INLINE_T) {
         rich_append(c, c->cbuf, c->cbuf_len);
@@ -318,6 +353,7 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
         c->state = SS_CELL;
     } else if (strcmp(name, "c") == 0 && c->state == SS_CELL) {
         emit_cell(c);
+        formula_buf_reset(c);  /* clear formula for next cell */
         c->state = SS_ROW;
     } else if (strcmp(name, "row") == 0 && c->state == SS_ROW) {
         c->state = SS_SHEET_DATA;
@@ -340,6 +376,8 @@ static void XMLCALL sheet_char(void *ud, const char *s, int n) {
     SheetCtx *c = ud;
     if (c->state == SS_VALUE || c->state == SS_INLINE_T) {
         cbuf_append(c, s, n);
+    } else if (c->state == SS_FORMULA) {
+        formula_buf_append(c, s, n);
     }
 }
 
@@ -350,6 +388,7 @@ int oxl_parse_sheet(const char *buf, size_t len,
     c.ws   = ws;
     c.wb   = wb;
     cbuf_reset(&c);
+    formula_buf_reset(&c);
 
     XML_Parser p = XML_ParserCreate("UTF-8");
     if (!p) return -1;
@@ -360,6 +399,7 @@ int oxl_parse_sheet(const char *buf, size_t len,
     int ok = XML_Parse(p, buf, (int)len, 1) == XML_STATUS_OK;
     XML_ParserFree(p);
     if (c.heap_buf) free(c.heap_buf);
+    if (c.formula_heap) free(c.formula_heap);
     free(c.rich_buf);
     return (ok && !c.error) ? 0 : -1;
 }

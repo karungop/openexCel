@@ -104,4 +104,6 @@ void oxl_cell_free(OxlCell *c) {
         free(c->v.s_inline);
         c->v.s_inline = NULL;
     }
+    free(c->formula);
+    c->formula = NULL;
 }
