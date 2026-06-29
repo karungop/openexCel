@@ -9,6 +9,7 @@
 #include "workbook.h"
 #include "worksheet.h"
 #include "cell.h"
+#include "styles.h"
 #include "string_table.h"
 #include "reader/reader.h"
 #include "writer/writer.h"
@@ -122,6 +123,16 @@ static int parse_a1_ref(const char *ref, uint32_t *row, uint16_t *col) {
 /* ========== Helper: OxlCell → Python object ========== */
 
 static PyObject *cell_to_python(const OxlCell *c, OxlWorkbook *wb) {
+    if (c->formula) {
+        size_t flen = strlen(c->formula);
+        char *tmp = malloc(flen + 2);
+        if (!tmp) return PyErr_NoMemory();
+        tmp[0] = '=';
+        memcpy(tmp + 1, c->formula, flen + 1);
+        PyObject *ret = PyUnicode_FromString(tmp);
+        free(tmp);
+        return ret;
+    }
     switch (c->type) {
     case OXL_CELL_EMPTY:
         Py_RETURN_NONE;
@@ -194,12 +205,14 @@ static uint32_t ws_find_pos(OxlWorksheet *ws, uint32_t row, uint16_t col) {
     return lo;
 }
 
-/* Free inline string data from a cell if applicable. */
+/* Free heap-owned fields from a cell before overwriting. */
 static void cell_free_inline(OxlCell *c) {
     if (c->type == OXL_CELL_INLINE_STR || c->type == OXL_CELL_ERROR) {
         free(c->v.s_inline);
         c->v.s_inline = NULL;
     }
+    free(c->formula);
+    c->formula = NULL;
 }
 
 /* Set a cell at (row, col). If it exists, update type+value. If not, insert sorted.
@@ -229,11 +242,11 @@ static int ws_set_cell(OxlWorksheet *ws, OxlWorkbook *wb, uint32_t row, uint16_t
         const char *s = PyUnicode_AsUTF8(value);
         if (!s) return -1;
         if (s[0] == '=') {
-            /* Formula: store as inline string (formula placeholder) */
+            /* Formula: store raw expression (without '=') in cell->formula */
             char *dup = strdup(s + 1);
             if (!dup) { PyErr_NoMemory(); return -1; }
-            newc.type = OXL_CELL_INLINE_STR;
-            newc.v.s_inline = dup;
+            newc.formula = dup;
+            newc.type = OXL_CELL_EMPTY;  /* no cached numeric value */
         } else {
             uint32_t idx = oxl_sst_intern(&wb->sst, s);
             newc.type    = OXL_CELL_STRING;
@@ -274,17 +287,21 @@ static int ws_set_cell(OxlWorksheet *ws, OxlWorkbook *wb, uint32_t row, uint16_t
     if (pos < ws->cell_count) {
         uint64_t ek = cell_key(ws->cells[pos].row, ws->cells[pos].col);
         if (ek == cell_key(row, col)) {
-            /* Found: update in place */
+            /* Found: update in place, preserve style_idx */
+            uint16_t saved_style = ws->cells[pos].style_idx;
             cell_free_inline(&ws->cells[pos]);
-            ws->cells[pos].type = newc.type;
-            ws->cells[pos].v    = newc.v;
+            ws->cells[pos].type    = newc.type;
+            ws->cells[pos].v       = newc.v;
+            ws->cells[pos].formula = newc.formula;
+            if (ws->cells[pos].style_idx == 0)
+                ws->cells[pos].style_idx = saved_style;
             return 0;
         }
     }
 
     /* Not found: insert at pos */
-    if (newc.type == OXL_CELL_EMPTY) {
-        /* Nothing to insert for empty cells that don't exist */
+    if (newc.type == OXL_CELL_EMPTY && !newc.formula && newc.style_idx == 0) {
+        /* Nothing to insert for truly empty cells that don't exist */
         return 0;
     }
 
@@ -421,8 +438,10 @@ static PyObject *cell_get_column_letter(PyXlCellObject *self, void *Py_UNUSED(x)
 
 static PyObject *cell_get_data_type(PyXlCellObject *self, void *Py_UNUSED(x)) {
     OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
-    if (!c || c->type == OXL_CELL_EMPTY) return PyUnicode_FromString("n");
+    if (!c) return PyUnicode_FromString("n");
+    if (c->formula) return PyUnicode_FromString("f");
     switch (c->type) {
+    case OXL_CELL_EMPTY:      return PyUnicode_FromString("n");
     case OXL_CELL_FLOAT:      return PyUnicode_FromString("n");
     case OXL_CELL_STRING:     return PyUnicode_FromString("s");
     case OXL_CELL_INLINE_STR: return PyUnicode_FromString("s");
@@ -431,6 +450,57 @@ static PyObject *cell_get_data_type(PyXlCellObject *self, void *Py_UNUSED(x)) {
     case OXL_CELL_ERROR:      return PyUnicode_FromString("e");
     default:                  return PyUnicode_FromString("n");
     }
+}
+
+static PyObject *cell_get_number_format(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    uint16_t style_idx = c ? c->style_idx : 0;
+    const char *fmt = oxl_styles_get_numfmt_str(&self->wb->styles, style_idx);
+    if (!fmt) Py_RETURN_NONE;
+    return PyUnicode_FromString(fmt);
+}
+
+static int cell_set_number_format(PyXlCellObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value || value == Py_None) {
+        OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+        if (c) c->style_idx = 0;
+        return 0;
+    }
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "number_format must be a string");
+        return -1;
+    }
+    const char *fmt_str = PyUnicode_AsUTF8(value);
+    if (!fmt_str) return -1;
+    oxl_styles_init_write_defaults(&self->wb->styles);
+    uint16_t xf_idx = oxl_styles_get_or_add_xf(&self->wb->styles, fmt_str);
+
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    if (c) {
+        c->style_idx = xf_idx;
+    } else {
+        /* Create a stub EMPTY cell to carry the style */
+        OxlCell newc;
+        memset(&newc, 0, sizeof(newc));
+        newc.row = self->row;
+        newc.col = self->col;
+        newc.style_idx = xf_idx;
+        newc.type = OXL_CELL_EMPTY;
+        uint32_t pos = ws_find_pos(self->ws, self->row, self->col);
+        if (self->ws->cell_count >= self->ws->cell_capacity) {
+            uint32_t new_cap = self->ws->cell_capacity == 0 ? 8 : self->ws->cell_capacity * 2;
+            OxlCell *nc = (OxlCell *)realloc(self->ws->cells, new_cap * sizeof(OxlCell));
+            if (!nc) { PyErr_NoMemory(); return -1; }
+            self->ws->cells = nc;
+            self->ws->cell_capacity = new_cap;
+        }
+        if (pos < self->ws->cell_count)
+            memmove(&self->ws->cells[pos + 1], &self->ws->cells[pos],
+                    (self->ws->cell_count - pos) * sizeof(OxlCell));
+        self->ws->cells[pos] = newc;
+        self->ws->cell_count++;
+    }
+    return 0;
 }
 
 static PyObject *cell_repr(PyXlCellObject *self) {
@@ -443,12 +513,13 @@ static PyObject *cell_repr(PyXlCellObject *self) {
 }
 
 static PyGetSetDef cell_getset[] = {
-    {"value",         (getter)cell_get_value,         (setter)cell_set_value, "Cell value", NULL},
-    {"row",           (getter)cell_get_row,            NULL, "Row number (1-based)", NULL},
-    {"column",        (getter)cell_get_column,         NULL, "Column number (1-based)", NULL},
-    {"coordinate",    (getter)cell_get_coordinate,     NULL, "Cell coordinate (e.g. 'A1')", NULL},
-    {"column_letter", (getter)cell_get_column_letter,  NULL, "Column letter (e.g. 'A')", NULL},
-    {"data_type",     (getter)cell_get_data_type,      NULL, "Data type character", NULL},
+    {"value",         (getter)cell_get_value,          (setter)cell_set_value,          "Cell value", NULL},
+    {"row",           (getter)cell_get_row,             NULL,                            "Row number (1-based)", NULL},
+    {"column",        (getter)cell_get_column,          NULL,                            "Column number (1-based)", NULL},
+    {"coordinate",    (getter)cell_get_coordinate,      NULL,                            "Cell coordinate (e.g. 'A1')", NULL},
+    {"column_letter", (getter)cell_get_column_letter,   NULL,                            "Column letter (e.g. 'A')", NULL},
+    {"data_type",     (getter)cell_get_data_type,       NULL,                            "Data type character", NULL},
+    {"number_format", (getter)cell_get_number_format,   (setter)cell_set_number_format,  "Number format string", NULL},
     {NULL}
 };
 
