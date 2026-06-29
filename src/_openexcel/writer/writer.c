@@ -173,7 +173,27 @@ int oxl_write_workbook(OxlWorkbook *wb, const char *path,
         oxl_xmlbuf_uint(&b, i + 2);
         oxl_xmlbuf_cstr(&b, "\"/>");
     }
-    oxl_xmlbuf_cstr(&b, "</sheets></workbook>");
+    oxl_xmlbuf_cstr(&b, "</sheets>");
+    if (wb->defined_name_count > 0) {
+        oxl_xmlbuf_cstr(&b, "<definedNames>");
+        for (uint32_t i = 0; i < wb->defined_name_count; i++) {
+            const OxlDefinedName *dn = &wb->defined_names[i];
+            oxl_xmlbuf_cstr(&b, "<definedName name=\"");
+            oxl_xmlbuf_attr_val(&b, dn->name ? dn->name : "");
+            if (dn->local_sheet_id >= 0) {
+                oxl_xmlbuf_cstr(&b, "\" localSheetId=\"");
+                oxl_xmlbuf_uint(&b, (uint32_t)dn->local_sheet_id);
+            }
+            if (dn->hidden) {
+                oxl_xmlbuf_cstr(&b, "\" hidden=\"1");
+            }
+            oxl_xmlbuf_cstr(&b, "\">");
+            oxl_xmlbuf_text(&b, dn->value ? dn->value : "");
+            oxl_xmlbuf_cstr(&b, "</definedName>");
+        }
+        oxl_xmlbuf_cstr(&b, "</definedNames>");
+    }
+    oxl_xmlbuf_cstr(&b, "</workbook>");
     ADD("xl/workbook.xml");
 
 done:
