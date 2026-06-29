@@ -56,3 +56,4 @@ archs = ["x86_64", "aarch64"]
 before-build = "brew install expat || true"
 # Build native arm64 and cross-compile x86_64
 archs = ["arm64", "x86_64"]
+
