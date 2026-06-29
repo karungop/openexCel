@@ -125,10 +125,19 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
 
             if (c->type == OXL_CELL_EMPTY && !c->formula) continue;
 
-            /* Open <c> tag with r= attribute */
+            /* Determine which style index to emit */
+            uint16_t emit_style = c->style_idx;
+            if (c->type == OXL_CELL_DATE && emit_style == 0)
+                emit_style = date_xf_idx;  /* fallback to default date xf */
+
             oxl_xmlbuf_cstr(b, "<c r=\"");
             emit_cell_ref(b, c->row, c->col);
             oxl_xmlbuf_raw(b, "\"", 1);
+            if (emit_style > 0) {
+                oxl_xmlbuf_cstr(b, " s=\"");
+                oxl_xmlbuf_uint(b, emit_style);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
 
             /* Type attribute (t=) */
             switch (c->type) {
@@ -142,19 +151,7 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
             case OXL_CELL_ERROR:
                 oxl_xmlbuf_cstr(b, " t=\"e\"");
                 break;
-            case OXL_CELL_DATE:
-                /* style attribute for dates */
-                oxl_xmlbuf_cstr(b, " s=\"");
-                oxl_xmlbuf_uint(b, c->style_idx > 0 ? c->style_idx : date_xf_idx);
-                oxl_xmlbuf_raw(b, "\"", 1);
-                break;
             default:
-                /* style attribute if set */
-                if (c->style_idx > 0) {
-                    oxl_xmlbuf_cstr(b, " s=\"");
-                    oxl_xmlbuf_uint(b, c->style_idx);
-                    oxl_xmlbuf_raw(b, "\"", 1);
-                }
                 break;
             }
 
