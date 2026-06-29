@@ -689,23 +689,217 @@ static PyObject *worksheet_get_title(PyWorksheetObject *self, void *Py_UNUSED(x)
     return PyUnicode_DecodeUTF8(self->ws->name, (Py_ssize_t)strlen(self->ws->name), "replace");
 }
 
+/* ── Phase 5: Merged cells ──────────────────────────────────────────────── */
+
+static int parse_range_ref(const char *ref, uint32_t *min_row, uint16_t *min_col,
+                            uint32_t *max_row, uint16_t *max_col) {
+    const char *colon = strchr(ref, ':');
+    if (!colon) return -1;
+    char start[32], end[32];
+    size_t slen = (size_t)(colon - ref);
+    if (slen >= sizeof(start) || strlen(colon + 1) >= sizeof(end)) return -1;
+    memcpy(start, ref, slen); start[slen] = '\0';
+    strcpy(end, colon + 1);
+    if (parse_a1_ref(start, min_row, min_col) < 0) return -1;
+    if (parse_a1_ref(end,   max_row, max_col) < 0) return -1;
+    return 0;
+}
+
+static PyObject *worksheet_merge_cells(PyWorksheetObject *self, PyObject *args) {
+    const char *ref;
+    if (!PyArg_ParseTuple(args, "s", &ref)) return NULL;
+    uint32_t r1, r2; uint16_t c1, c2;
+    if (parse_range_ref(ref, &r1, &c1, &r2, &c2) < 0) {
+        PyErr_Format(PyExc_ValueError, "Invalid range: %s", ref);
+        return NULL;
+    }
+    if (oxl_worksheet_add_merge(self->ws, r1 + 1, c1 + 1, r2 + 1, c2 + 1) < 0)
+        return PyErr_NoMemory();
+    Py_RETURN_NONE;
+}
+
+static PyObject *worksheet_unmerge_cells(PyWorksheetObject *self, PyObject *args) {
+    const char *ref;
+    if (!PyArg_ParseTuple(args, "s", &ref)) return NULL;
+    uint32_t r1, r2; uint16_t c1, c2;
+    if (parse_range_ref(ref, &r1, &c1, &r2, &c2) < 0) {
+        PyErr_Format(PyExc_ValueError, "Invalid range: %s", ref);
+        return NULL;
+    }
+    /* Convert to 1-based to match storage */
+    uint32_t mr1 = r1 + 1, mr2 = r2 + 1;
+    uint16_t mc1 = c1 + 1, mc2 = c2 + 1;
+    OxlWorksheet *ws = self->ws;
+    for (uint32_t i = 0; i < ws->merged_cell_count; i++) {
+        OxlMergedCell *m = &ws->merged_cells[i];
+        if (m->min_row == mr1 && m->min_col == mc1 &&
+            m->max_row == mr2 && m->max_col == mc2) {
+            memmove(&ws->merged_cells[i], &ws->merged_cells[i + 1],
+                    (ws->merged_cell_count - i - 1) * sizeof(OxlMergedCell));
+            ws->merged_cell_count--;
+            Py_RETURN_NONE;
+        }
+    }
+    Py_RETURN_NONE;  /* silently ignore if not found */
+}
+
+static PyObject *worksheet_get_merged_cells(PyWorksheetObject *self, void *Py_UNUSED(x)) {
+    OxlWorksheet *ws = self->ws;
+    PyObject *tup = PyTuple_New((Py_ssize_t)ws->merged_cell_count);
+    if (!tup) return NULL;
+    char buf[64];
+    for (uint32_t i = 0; i < ws->merged_cell_count; i++) {
+        const OxlMergedCell *m = &ws->merged_cells[i];
+        char col1[5], col2[5];
+        col_idx_to_str((int)m->min_col, col1);
+        col_idx_to_str((int)m->max_col, col2);
+        snprintf(buf, sizeof(buf), "%s%u:%s%u", col1, m->min_row, col2, m->max_row);
+        PyObject *s = PyUnicode_FromString(buf);
+        if (!s) { Py_DECREF(tup); return NULL; }
+        PyTuple_SET_ITEM(tup, (Py_ssize_t)i, s);
+    }
+    return tup;
+}
+
+/* ── Phase 4: Column/Row Dimensions ─────────────────────────────────────── */
+
+static PyObject *worksheet_set_column_width(PyWorksheetObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"col", "width", "hidden", NULL};
+    PyObject *col_obj;
+    double width = 0.0;
+    int hidden = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "Od|i", kwlist, &col_obj, &width, &hidden))
+        return NULL;
+    int ci;
+    if (PyLong_Check(col_obj)) {
+        ci = (int)PyLong_AsLong(col_obj);
+    } else if (PyUnicode_Check(col_obj)) {
+        const char *s = PyUnicode_AsUTF8(col_obj);
+        if (!s) return NULL;
+        ci = col_str_to_idx(s);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "col must be str or int");
+        return NULL;
+    }
+    if (ci < 1) { PyErr_SetString(PyExc_ValueError, "Invalid column"); return NULL; }
+    int custom = width > 0.0;
+    if (oxl_worksheet_set_col_dim(self->ws, (uint16_t)ci, (uint16_t)ci,
+                                   width, hidden, 0, custom) < 0)
+        return PyErr_NoMemory();
+    Py_RETURN_NONE;
+}
+
+static PyObject *worksheet_set_row_height(PyWorksheetObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"row", "height", "hidden", NULL};
+    int row;
+    double height = 0.0;
+    int hidden = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "id|i", kwlist, &row, &height, &hidden))
+        return NULL;
+    if (row < 1) { PyErr_SetString(PyExc_ValueError, "Row must be >= 1"); return NULL; }
+    int custom = height > 0.0;
+    if (oxl_worksheet_set_row_dim(self->ws, (uint32_t)row, height, hidden, custom) < 0)
+        return PyErr_NoMemory();
+    Py_RETURN_NONE;
+}
+
+/* ── Phase 9: Freeze panes / sheet view ──────────────────────────────────── */
+
+static PyObject *worksheet_get_freeze_panes(PyWorksheetObject *self, void *Py_UNUSED(x)) {
+    if (!self->ws->freeze_panes) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->ws->freeze_panes);
+}
+
+static int worksheet_set_freeze_panes(PyWorksheetObject *self, PyObject *v, void *Py_UNUSED(x)) {
+    free(self->ws->freeze_panes);
+    self->ws->freeze_panes = NULL;
+    if (v == Py_None) return 0;
+    const char *s = PyUnicode_AsUTF8(v);
+    if (!s) return -1;
+    self->ws->freeze_panes = strdup(s);
+    return self->ws->freeze_panes ? 0 : (PyErr_NoMemory(), -1);
+}
+
+static PyObject *worksheet_get_zoom_scale(PyWorksheetObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->ws->zoom_scale);
+}
+
+static int worksheet_set_zoom_scale(PyWorksheetObject *self, PyObject *v, void *Py_UNUSED(x)) {
+    long z = PyLong_AsLong(v);
+    if (z == -1 && PyErr_Occurred()) return -1;
+    self->ws->zoom_scale = (int)z;
+    return 0;
+}
+
+static PyObject *worksheet_get_show_gridlines(PyWorksheetObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->ws->show_gridlines);
+}
+
+static int worksheet_set_show_gridlines(PyWorksheetObject *self, PyObject *v, void *Py_UNUSED(x)) {
+    self->ws->show_gridlines = PyObject_IsTrue(v);
+    return 0;
+}
+
+/* ── Phase 10: Tab color ─────────────────────────────────────────────────── */
+
+static PyObject *worksheet_get_tab_color(PyWorksheetObject *self, void *Py_UNUSED(x)) {
+    if (!self->ws->tab_color[0]) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->ws->tab_color);
+}
+
+static int worksheet_set_tab_color(PyWorksheetObject *self, PyObject *v, void *Py_UNUSED(x)) {
+    if (v == Py_None) { self->ws->tab_color[0] = '\0'; return 0; }
+    const char *s = PyUnicode_AsUTF8(v);
+    if (!s) return -1;
+    strncpy(self->ws->tab_color, s, 8);
+    self->ws->tab_color[8] = '\0';
+    return 0;
+}
+
+/* ── Phase 11: Auto-filter ───────────────────────────────────────────────── */
+
+static PyObject *worksheet_get_auto_filter_ref(PyWorksheetObject *self, void *Py_UNUSED(x)) {
+    if (!self->ws->auto_filter_ref) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->ws->auto_filter_ref);
+}
+
+static int worksheet_set_auto_filter_ref(PyWorksheetObject *self, PyObject *v, void *Py_UNUSED(x)) {
+    free(self->ws->auto_filter_ref);
+    self->ws->auto_filter_ref = NULL;
+    if (v == Py_None) return 0;
+    const char *s = PyUnicode_AsUTF8(v);
+    if (!s) return -1;
+    self->ws->auto_filter_ref = strdup(s);
+    return self->ws->auto_filter_ref ? 0 : (PyErr_NoMemory(), -1);
+}
+
 static void worksheet_dealloc(PyWorksheetObject *self) {
     Py_XDECREF(self->owner);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 static PyMethodDef worksheet_methods[] = {
-    {"__iter__",  (PyCFunction)worksheet_iter,      METH_NOARGS,   "Iterate rows"},
-    {"iter_rows", (PyCFunction)(void(*)(void))worksheet_iter_rows, METH_VARARGS|METH_KEYWORDS, "iter_rows(min_row=0, max_row=-1, min_col=0, max_col=-1)"},
-    {"append",    (PyCFunction)worksheet_append,    METH_O,        "Append a row"},
-    {"cell",      (PyCFunction)(void(*)(void))worksheet_cell, METH_VARARGS|METH_KEYWORDS, "cell(row=1, column=1)"},
+    {"__iter__",         (PyCFunction)worksheet_iter,           METH_NOARGS,   "Iterate rows"},
+    {"iter_rows",        (PyCFunction)(void(*)(void))worksheet_iter_rows, METH_VARARGS|METH_KEYWORDS, "iter_rows(min_row=0, max_row=-1, min_col=0, max_col=-1)"},
+    {"append",           (PyCFunction)worksheet_append,         METH_O,        "Append a row"},
+    {"cell",             (PyCFunction)(void(*)(void))worksheet_cell, METH_VARARGS|METH_KEYWORDS, "cell(row=1, column=1)"},
+    {"merge_cells",      (PyCFunction)worksheet_merge_cells,    METH_VARARGS,  "merge_cells('A1:C3')"},
+    {"unmerge_cells",    (PyCFunction)worksheet_unmerge_cells,  METH_VARARGS,  "unmerge_cells('A1:C3')"},
+    {"set_column_width", (PyCFunction)(void(*)(void))worksheet_set_column_width, METH_VARARGS|METH_KEYWORDS, "set_column_width(col, width, hidden=False)"},
+    {"set_row_height",   (PyCFunction)(void(*)(void))worksheet_set_row_height,   METH_VARARGS|METH_KEYWORDS, "set_row_height(row, height, hidden=False)"},
     {NULL, NULL}
 };
 
 static PyGetSetDef worksheet_getset[] = {
-    {"max_row",    (getter)worksheet_get_max_row, NULL, "Number of rows", NULL},
-    {"max_column", (getter)worksheet_get_max_col, NULL, "Number of columns", NULL},
-    {"title",      (getter)worksheet_get_title,   NULL, "Sheet name", NULL},
+    {"max_row",         (getter)worksheet_get_max_row,         NULL,                           "Number of rows",     NULL},
+    {"max_column",      (getter)worksheet_get_max_col,         NULL,                           "Number of columns",  NULL},
+    {"title",           (getter)worksheet_get_title,           NULL,                           "Sheet name",         NULL},
+    {"merged_cells",    (getter)worksheet_get_merged_cells,    NULL,                           "Merged cell ranges", NULL},
+    {"freeze_panes",    (getter)worksheet_get_freeze_panes,    (setter)worksheet_set_freeze_panes,    "Freeze panes cell ref", NULL},
+    {"zoom_scale",      (getter)worksheet_get_zoom_scale,      (setter)worksheet_set_zoom_scale,      "Zoom scale %",       NULL},
+    {"show_gridlines",  (getter)worksheet_get_show_gridlines,  (setter)worksheet_set_show_gridlines,  "Show gridlines",     NULL},
+    {"tab_color",       (getter)worksheet_get_tab_color,       (setter)worksheet_set_tab_color,       "Tab color hex",      NULL},
+    {"auto_filter_ref", (getter)worksheet_get_auto_filter_ref, (setter)worksheet_set_auto_filter_ref, "Auto-filter range",  NULL},
     {NULL}
 };
 
@@ -818,18 +1012,50 @@ static PyObject *workbook_new(PyTypeObject *type, PyObject *args, PyObject *kw) 
     return (PyObject *)obj;
 }
 
+/* ── Phase 6: Defined names ──────────────────────────────────────────────── */
+
+static PyObject *workbook_add_defined_name(PyWorkbookObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"name", "value", "local_sheet_id", "hidden", NULL};
+    const char *name, *value;
+    int local_sheet_id = -1, hidden = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "ss|ii", kwlist,
+                                     &name, &value, &local_sheet_id, &hidden))
+        return NULL;
+    if (oxl_workbook_add_defined_name(self->wb, name, value, local_sheet_id, hidden) < 0)
+        return PyErr_NoMemory();
+    Py_RETURN_NONE;
+}
+
+static PyObject *workbook_get_defined_names(PyWorkbookObject *self, void *Py_UNUSED(x)) {
+    PyObject *d = PyDict_New();
+    if (!d) return NULL;
+    OxlWorkbook *wb = self->wb;
+    for (uint32_t i = 0; i < wb->defined_name_count; i++) {
+        const OxlDefinedName *dn = &wb->defined_names[i];
+        if (!dn->name) continue;
+        PyObject *key = PyUnicode_FromString(dn->name);
+        PyObject *val = PyUnicode_FromString(dn->value ? dn->value : "");
+        if (!key || !val) { Py_XDECREF(key); Py_XDECREF(val); Py_DECREF(d); return NULL; }
+        PyDict_SetItem(d, key, val);
+        Py_DECREF(key); Py_DECREF(val);
+    }
+    return d;
+}
+
 static PyMethodDef workbook_methods[] = {
-    {"create_sheet", (PyCFunction)workbook_create_sheet, METH_VARARGS, "create_sheet(name='Sheet')"},
-    {"save",         (PyCFunction)workbook_save,         METH_VARARGS, "save(path)"},
-    {"close",        (PyCFunction)workbook_close,        METH_NOARGS,  "close()"},
-    {"__enter__",    (PyCFunction)workbook_enter,        METH_NOARGS,  NULL},
-    {"__exit__",     (PyCFunction)workbook_exit,         METH_VARARGS, NULL},
-    {"__len__",      (PyCFunction)workbook_len,          METH_NOARGS,  NULL},
+    {"create_sheet",      (PyCFunction)workbook_create_sheet,  METH_VARARGS, "create_sheet(name='Sheet')"},
+    {"save",              (PyCFunction)workbook_save,          METH_VARARGS, "save(path)"},
+    {"close",             (PyCFunction)workbook_close,         METH_NOARGS,  "close()"},
+    {"__enter__",         (PyCFunction)workbook_enter,         METH_NOARGS,  NULL},
+    {"__exit__",          (PyCFunction)workbook_exit,          METH_VARARGS, NULL},
+    {"__len__",           (PyCFunction)workbook_len,           METH_NOARGS,  NULL},
+    {"add_defined_name",  (PyCFunction)(void(*)(void))workbook_add_defined_name, METH_VARARGS|METH_KEYWORDS, "add_defined_name(name, value, local_sheet_id=-1, hidden=0)"},
     {NULL, NULL}
 };
 
 static PyGetSetDef workbook_getset[] = {
-    {"active", (getter)workbook_get_active, NULL, "First sheet", NULL},
+    {"active",        (getter)workbook_get_active,        NULL, "First sheet",    NULL},
+    {"defined_names", (getter)workbook_get_defined_names, NULL, "Defined names dict", NULL},
     {NULL}
 };
 
