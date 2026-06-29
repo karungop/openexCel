@@ -11,7 +11,17 @@ openpyxl is pure Python. For large files (100k+ rows), the bottlenecks are ZIP e
 - **GIL released** during read and write — other threads run freely
 - **Vendored miniz** — no external ZIP dependency
 
-Typical speedups: **10–30× faster reads**, **5–15× faster writes** on 100k-row sheets.
+Benchmarked against openpyxl on mixed workloads (integers, floats, booleans, dates, strings):
+
+| Rows | Write speedup | Read speedup |
+|---:|---:|---:|
+| 1,000 | 8.5× | 5.3× |
+| 10,000 | 8.8× | 5.2× |
+| 50,000 | 8.1× | 5.3× |
+| 100,000 | 8.0× | 5.3× |
+| 250,000 | 7.8× | 5.4× |
+
+**~8× faster writes, ~5× faster reads** across all sizes tested. Speedup is consistent — there is no warm-up effect.
 
 ## Installation
 

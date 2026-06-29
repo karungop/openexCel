@@ -68,27 +68,31 @@ OxlDate oxl_serial_to_date(double serial, int date1904) {
     return d;
 }
 
+/* Convert a Gregorian date to a Julian Day Number (a standard astronomical day
+   count). We use this to compute differences from Excel's epoch in O(1). */
+static long gregorian_to_jdn(int y, int m, int dom) {
+    /* Knuth / Richards algorithm */
+    int a = (14 - m) / 12;
+    int yy = y + 4800 - a;
+    int mm = m + 12 * a - 3;
+    return dom + (153 * mm + 2) / 5 + 365L * yy + yy / 4 - yy / 100 + yy / 400 - 32045;
+}
+
 double oxl_date_to_serial(OxlDate d, int date1904) {
-    /* Count days from epoch to d.year-d.month-d.day */
-    long days = 0;
-    int base_year, base_month, base_day;
-
+    long days;
     if (date1904) {
-        base_year = 1904; base_month = 1; base_day = 1;
+        /* Day 0 = 1904-01-01 */
+        long epoch = gregorian_to_jdn(1904, 1, 1);
+        long target = gregorian_to_jdn(d.year, d.month, d.day);
+        days = target - epoch;
     } else {
-        base_year = 1899; base_month = 12; base_day = 31;
+        /* Day 1 = 1900-01-01; epoch anchor is 1899-12-30 (so JDN diff gives serial) */
+        long epoch = gregorian_to_jdn(1899, 12, 31);
+        long target = gregorian_to_jdn(d.year, d.month, d.day);
+        days = target - epoch;
+        /* Excel 1900 bug: dates >= 1900-03-01 are off by 1 due to phantom Feb 29 */
+        if (days >= 60) days++;
     }
-
-    int y = base_year, m = base_month, day = base_day;
-    while (y < d.year || (y == d.year && m < d.month) ||
-           (y == d.year && m == d.month && day < d.day)) {
-        days++;
-        day++;
-        if (day > days_in_month(m, y)) { day = 1; m++; }
-        if (m > 12) { m = 1; y++; }
-    }
-
-    if (!date1904 && days >= 59) days++; /* re-insert the phantom day 60 */
 
     double frac = d.hour / 24.0 + d.min / 1440.0 + d.sec / 86400.0;
     return (double)days + frac;
