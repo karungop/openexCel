@@ -15,3 +15,4 @@ cmake_install.cmake
 Makefile
 tests/fixtures/large_100k.xlsx
 *.md
+!README.md
