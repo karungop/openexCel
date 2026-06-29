@@ -13,6 +13,14 @@ typedef struct {
     char        **rids;     /* rids[i] = strdup of rId for sheet i */
     uint32_t      rid_count;
     uint32_t      rid_cap;
+    /* defined names */
+    int          in_defined_names;
+    int          cur_dn_sheet_id;  /* local sheet id for current definedName, -1=global */
+    int          cur_dn_hidden;
+    char         cur_dn_name[256]; /* current definedName's name attribute */
+    /* character accumulator for the text content of <definedName> */
+    char         dn_buf[1024];
+    size_t       dn_len;
 } WbCtx;
 
 static const char *attr(const char **attrs, const char *key) {
@@ -28,6 +36,22 @@ static void XMLCALL wb_start(void *ud, const char *name, const char **attrs) {
     if (strcmp(name, "workbookPr") == 0) {
         const char *d = attr(attrs, "date1904");
         if (d && (strcmp(d,"1") == 0 || strcmp(d,"true") == 0)) c->wb->date1904 = 1;
+    } else if (strcmp(name, "definedNames") == 0) {
+        c->in_defined_names = 1;
+    } else if (strcmp(name, "definedName") == 0 && c->in_defined_names) {
+        const char *n   = attr(attrs, "name");
+        const char *lsi = attr(attrs, "localSheetId");
+        const char *hid = attr(attrs, "hidden");
+        if (n) {
+            strncpy(c->cur_dn_name, n, 255);
+            c->cur_dn_name[255] = '\0';
+        } else {
+            c->cur_dn_name[0] = '\0';
+        }
+        c->cur_dn_sheet_id = lsi ? atoi(lsi) : -1;
+        c->cur_dn_hidden   = hid && (hid[0]=='1' || strcmp(hid,"true")==0);
+        c->dn_len = 0;
+        c->dn_buf[0] = '\0';
     } else if (strcmp(name, "sheets") == 0) {
         c->in_sheets = 1;
     } else if (strcmp(name, "sheet") == 0 && c->in_sheets) {
@@ -54,7 +78,28 @@ static void XMLCALL wb_end(void *ud, const char *name) {
     WbCtx *c = ud;
     const char *local = strrchr(name, ':');
     if (local) name = local + 1;
-    if (strcmp(name, "sheets") == 0) c->in_sheets = 0;
+    if (strcmp(name, "sheets") == 0) {
+        c->in_sheets = 0;
+    } else if (strcmp(name, "definedNames") == 0) {
+        c->in_defined_names = 0;
+    } else if (strcmp(name, "definedName") == 0 && c->in_defined_names) {
+        if (c->cur_dn_name[0] != '\0') {
+            c->dn_buf[c->dn_len < 1023 ? c->dn_len : 1023] = '\0';
+            oxl_workbook_add_defined_name(c->wb, c->cur_dn_name, c->dn_buf,
+                                           c->cur_dn_sheet_id, c->cur_dn_hidden);
+        }
+        c->cur_dn_name[0] = '\0';
+        c->dn_len = 0;
+    }
+}
+
+static void XMLCALL wb_chardata(void *ud, const char *s, int len) {
+    WbCtx *c = ud;
+    if (!c->in_defined_names || c->cur_dn_name[0] == '\0') return;
+    size_t avail = sizeof(c->dn_buf) - c->dn_len - 1;
+    size_t copy  = (size_t)len < avail ? (size_t)len : avail;
+    memcpy(c->dn_buf + c->dn_len, s, copy);
+    c->dn_len += copy;
 }
 
 int oxl_parse_workbook_xml(const char *buf, size_t len, OxlWorkbook *wb) {
@@ -65,6 +110,7 @@ int oxl_parse_workbook_xml(const char *buf, size_t len, OxlWorkbook *wb) {
     if (!p) return -1;
     XML_SetUserData(p, &c);
     XML_SetElementHandler(p, wb_start, wb_end);
+    XML_SetCharacterDataHandler(p, wb_chardata);
 
     int ok = XML_Parse(p, buf, (int)len, 1) == XML_STATUS_OK;
     XML_ParserFree(p);
