@@ -16,6 +16,11 @@ typedef enum {
     SS_FORMULA,
     SS_INLINE_SI,
     SS_INLINE_T,
+    /* Feature A */
+    SS_COLS,
+    /* Feature C */
+    SS_SHEET_VIEWS,
+    SS_SHEET_VIEW,
 } SheetState;
 
 #define CBUF_STACK 512
@@ -146,15 +151,118 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
 
     switch (c->state) {
     case SS_NONE:
-        if (strcmp(name, "sheetData") == 0) c->state = SS_SHEET_DATA;
+        /* Feature C: sheetViews */
+        if (strcmp(name, "sheetViews") == 0) {
+            c->state = SS_SHEET_VIEWS;
+        }
+        /* Feature A: cols block */
+        else if (strcmp(name, "cols") == 0) {
+            c->state = SS_COLS;
+        }
+        /* Feature D: tab color (sheetPr/tabColor) */
+        else if (strcmp(name, "tabColor") == 0) {
+            const char *rgb = attr(attrs, "rgb");
+            const char *theme = attr(attrs, "theme");
+            if (rgb) {
+                strncpy(c->ws->tab_color, rgb, 8);
+                c->ws->tab_color[8] = '\0';
+            }
+            (void)theme;
+        }
+        /* Feature B: mergeCell */
+        else if (strcmp(name, "mergeCell") == 0) {
+            const char *ref = attr(attrs, "ref");
+            if (ref) {
+                char buf[32];
+                strncpy(buf, ref, 31);
+                buf[31] = '\0';
+                char *colon = strchr(buf, ':');
+                if (colon) {
+                    *colon = '\0';
+                    uint32_t r1, r2;
+                    uint16_t c1, c2;
+                    parse_cell_ref(buf, &r1, &c1);
+                    parse_cell_ref(colon + 1, &r2, &c2);
+                    oxl_worksheet_add_merge(c->ws, r1 + 1, c1 + 1, r2 + 1, c2 + 1);
+                }
+            }
+        }
+        /* Feature E: autoFilter */
+        else if (strcmp(name, "autoFilter") == 0) {
+            const char *ref = attr(attrs, "ref");
+            if (ref) {
+                free(c->ws->auto_filter_ref);
+                c->ws->auto_filter_ref = strdup(ref);
+            }
+        }
+        else if (strcmp(name, "sheetData") == 0) {
+            c->state = SS_SHEET_DATA;
+        }
         break;
+
+    /* Feature C: sheetViews / sheetView / pane */
+    case SS_SHEET_VIEWS:
+        if (strcmp(name, "sheetView") == 0) {
+            const char *zs = attr(attrs, "zoomScale");
+            const char *gl = attr(attrs, "showGridLines");
+            if (zs) c->ws->zoom_scale = atoi(zs);
+            if (gl && (gl[0] == '0' || strcmp(gl, "false") == 0))
+                c->ws->show_gridlines = 0;
+            c->state = SS_SHEET_VIEW;
+        }
+        break;
+
+    case SS_SHEET_VIEW:
+        if (strcmp(name, "pane") == 0) {
+            const char *state_s  = attr(attrs, "state");
+            const char *top_left = attr(attrs, "topLeftCell");
+            if (state_s && strcmp(state_s, "frozen") == 0 && top_left) {
+                free(c->ws->freeze_panes);
+                c->ws->freeze_panes = strdup(top_left);
+            }
+        }
+        break;
+
+    /* Feature A: col element */
+    case SS_COLS:
+        if (strcmp(name, "col") == 0) {
+            const char *min_s = attr(attrs, "min");
+            const char *max_s = attr(attrs, "max");
+            const char *w_s   = attr(attrs, "width");
+            const char *hid_s = attr(attrs, "hidden");
+            const char *bf_s  = attr(attrs, "bestFit");
+            const char *cw_s  = attr(attrs, "customWidth");
+            uint16_t mn = min_s ? (uint16_t)atoi(min_s) : 1;
+            uint16_t mx = max_s ? (uint16_t)atoi(max_s) : mn;
+            double w    = w_s   ? atof(w_s)  : 0.0;
+            int hid = hid_s && (hid_s[0] == '1' || strcmp(hid_s, "true") == 0);
+            int bf  = bf_s  && (bf_s[0]  == '1' || strcmp(bf_s,  "true") == 0);
+            int cw  = cw_s  && (cw_s[0]  == '1' || strcmp(cw_s,  "true") == 0);
+            oxl_worksheet_set_col_dim(c->ws, mn, mx, w, hid, bf, cw);
+        }
+        break;
+
     case SS_SHEET_DATA:
         if (strcmp(name, "row") == 0) {
             const char *r = attr(attrs, "r");
             c->cur_row = r ? (uint32_t)(atoi(r) - 1) : c->cur_row;
+
+            /* Feature A: row height / hidden */
+            const char *ht_s  = attr(attrs, "ht");
+            const char *hid_s = attr(attrs, "hidden");
+            const char *ch_s  = attr(attrs, "customHeight");
+            if (ht_s || hid_s) {
+                double h = ht_s ? atof(ht_s) : 0.0;
+                int hid  = hid_s && (hid_s[0] == '1' || strcmp(hid_s, "true") == 0);
+                int ch   = ch_s  && (ch_s[0]  == '1' || strcmp(ch_s,  "true") == 0);
+                uint32_t r1 = c->cur_row + 1; /* convert 0-based to 1-based */
+                oxl_worksheet_set_row_dim(c->ws, r1, h, hid, ch);
+            }
+
             c->state = SS_ROW;
         }
         break;
+
     case SS_ROW:
         if (strcmp(name, "c") == 0) {
             const char *r = attr(attrs, "r");
@@ -168,6 +276,7 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
             c->state = SS_CELL;
         }
         break;
+
     case SS_CELL:
         if (strcmp(name, "v") == 0) {
             cbuf_reset(c);
@@ -179,12 +288,14 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
             c->state = SS_INLINE_SI;
         }
         break;
+
     case SS_INLINE_SI:
         if (strcmp(name, "t") == 0) {
             cbuf_reset(c);
             c->state = SS_INLINE_T;
         }
         break;
+
     default:
         break;
     }
@@ -211,6 +322,16 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
     } else if (strcmp(name, "row") == 0 && c->state == SS_ROW) {
         c->state = SS_SHEET_DATA;
     } else if (strcmp(name, "sheetData") == 0 && c->state == SS_SHEET_DATA) {
+        c->state = SS_NONE;
+    }
+    /* Feature A: cols end */
+    else if (strcmp(name, "cols") == 0 && c->state == SS_COLS) {
+        c->state = SS_NONE;
+    }
+    /* Feature C: sheetView / sheetViews end */
+    else if (strcmp(name, "sheetView") == 0 && c->state == SS_SHEET_VIEW) {
+        c->state = SS_SHEET_VIEWS;
+    } else if (strcmp(name, "sheetViews") == 0 && c->state == SS_SHEET_VIEWS) {
         c->state = SS_NONE;
     }
 }
