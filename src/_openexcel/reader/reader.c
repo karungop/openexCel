@@ -4,6 +4,7 @@
 #include "xml_sst.h"
 #include "xml_styles.h"
 #include "xml_sheet.h"
+#include "xml_sheet_rels.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -70,9 +71,36 @@ OxlWorkbook *oxl_read_workbook(const char *path, char *err_buf, size_t err_cap) 
         if (oxl_zip_extract(zr, ws->rel_path, &buf, &sz) != 0) {
             ERR("Cannot extract sheet: %s", ws->rel_path); goto fail;
         }
-        if (oxl_parse_sheet(buf, sz, ws, wb) != 0) {
+
+        /* Try to parse sheet rels file for hyperlinks.
+           Derive rels path: "xl/worksheets/sheet1.xml" → "xl/worksheets/_rels/sheet1.xml.rels" */
+        OxlHyperlinkRels sheet_rels;
+        oxl_hyperlink_rels_init(&sheet_rels);
+        {
+            const char *rel_path = ws->rel_path;
+            const char *last_slash = strrchr(rel_path, '/');
+            const char *fname = last_slash ? last_slash + 1 : rel_path;
+            char rels_path[256];
+            if (last_slash) {
+                size_t dir_len = (size_t)(last_slash - rel_path);
+                snprintf(rels_path, sizeof(rels_path), "%.*s/_rels/%s.rels",
+                         (int)dir_len, rel_path, fname);
+            } else {
+                snprintf(rels_path, sizeof(rels_path), "_rels/%s.rels", fname);
+            }
+            char *rels_buf = NULL; size_t rels_sz = 0;
+            oxl_zip_extract(zr, rels_path, &rels_buf, &rels_sz);
+            if (rels_buf) {
+                oxl_parse_sheet_rels(rels_buf, rels_sz, &sheet_rels);
+                free(rels_buf);
+            }
+        }
+
+        if (oxl_parse_sheet(buf, sz, ws, wb, &sheet_rels) != 0) {
+            oxl_hyperlink_rels_free(&sheet_rels);
             ERR("Failed to parse sheet: %s", ws->rel_path); goto fail;
         }
+        oxl_hyperlink_rels_free(&sheet_rels);
     }
 
     free(buf);
