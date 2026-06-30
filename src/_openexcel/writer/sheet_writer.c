@@ -18,7 +18,8 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
     /* ── XML declaration + worksheet opening tag ───────────────────────── */
     oxl_xmlbuf_cstr(b,
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
-        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">");
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\""
+        " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">");
 
     /* ── Feature D: <sheetPr> / tab color ─────────────────────────────── */
     if (ws->tab_color[0] != '\0') {
@@ -229,6 +230,27 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
         oxl_xmlbuf_cstr(b, "<autoFilter ref=\"");
         oxl_xmlbuf_text(b, ws->auto_filter_ref);
         oxl_xmlbuf_cstr(b, "\"/>");
+    }
+
+    /* Phase 8: <hyperlinks> */
+    {
+        int has_hyperlinks = 0;
+        for (uint32_t hi = 0; hi < ws->cell_count; hi++) {
+            if (ws->cells[hi].hyperlink) { has_hyperlinks = 1; break; }
+        }
+        if (has_hyperlinks) {
+            oxl_xmlbuf_cstr(b, "<hyperlinks>");
+            uint32_t rid = 1;
+            for (uint32_t hi = 0; hi < ws->cell_count; hi++) {
+                if (!ws->cells[hi].hyperlink) continue;
+                oxl_xmlbuf_cstr(b, "<hyperlink ref=\"");
+                emit_cell_ref(b, ws->cells[hi].row, ws->cells[hi].col);
+                oxl_xmlbuf_cstr(b, "\" r:id=\"rId");
+                oxl_xmlbuf_uint(b, rid++);
+                oxl_xmlbuf_cstr(b, "\"/>");
+            }
+            oxl_xmlbuf_cstr(b, "</hyperlinks>");
+        }
     }
 
     oxl_xmlbuf_cstr(b, "</worksheet>");

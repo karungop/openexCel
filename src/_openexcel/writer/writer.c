@@ -39,6 +39,30 @@ static const char RELS_TMPL[] =
 
 /* styles.xml is now generated dynamically by oxl_write_styles() */
 
+static int sheet_has_hyperlinks(const OxlWorksheet *ws) {
+    for (uint32_t i = 0; i < ws->cell_count; i++)
+        if (ws->cells[i].hyperlink) return 1;
+    return 0;
+}
+
+static void write_sheet_rels_buf(OxlXmlBuf *b, const OxlWorksheet *ws) {
+    oxl_xmlbuf_cstr(b,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+    uint32_t rid = 1;
+    for (uint32_t i = 0; i < ws->cell_count; i++) {
+        if (!ws->cells[i].hyperlink) continue;
+        oxl_xmlbuf_cstr(b, "<Relationship Id=\"rId");
+        oxl_xmlbuf_uint(b, rid++);
+        oxl_xmlbuf_cstr(b,
+            "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/"
+            "relationships/hyperlink\" Target=\"");
+        oxl_xmlbuf_attr_val(b, ws->cells[i].hyperlink);
+        oxl_xmlbuf_cstr(b, "\" TargetMode=\"External\"/>");
+    }
+    oxl_xmlbuf_cstr(b, "</Relationships>");
+}
+
 static void intern_worksheet_strings(OxlWorkbook *wb, OxlWorksheet *ws) {
     for (uint32_t i = 0; i < ws->cell_count; i++) {
         OxlCell *c = &ws->cells[i];
@@ -137,6 +161,15 @@ int oxl_write_workbook(OxlWorkbook *wb, const char *path,
         snprintf(entry, sizeof(entry), "xl/worksheets/sheet%u.xml", i + 1);
         oxl_write_sheet(&b, wb->sheets[i], wb, 1);
         ADD(entry);
+
+        /* Write sheet rels file if this sheet has hyperlinks */
+        if (sheet_has_hyperlinks(wb->sheets[i])) {
+            char rels_entry[128];
+            snprintf(rels_entry, sizeof(rels_entry),
+                     "xl/worksheets/_rels/sheet%u.xml.rels", i + 1);
+            write_sheet_rels_buf(&b, wb->sheets[i]);
+            ADD(rels_entry);
+        }
     }
 
     /* 8. xl/workbook.xml */
