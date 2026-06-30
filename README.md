@@ -187,6 +187,61 @@ ws.tab_color = "FF0000"            # RRGGBB hex string
 ws.auto_filter_ref = "A1:D1"
 ```
 
+### Fonts, fills, borders, and alignment
+
+```python
+from openexcel import Font, PatternFill, Border, Side, Alignment
+
+cell = ws["A1"]
+
+# Font
+cell.font = Font(name="Arial", size=14, bold=True, italic=False,
+                 underline="single", color="FFFF0000")   # ARGB hex
+
+# Fill
+cell.fill = PatternFill(fill_type="solid", fgColor="FFFFFF00")   # ARGB hex
+
+# Border
+cell.border = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="medium"),
+    bottom=Side(style="medium"),
+)
+
+# Alignment
+cell.alignment = Alignment(horizontal="center", vertical="center",
+                           wrap_text=True, indent=0)
+
+# Read back
+print(cell.font.bold)              # True
+print(cell.fill.fill_type)         # "solid"
+print(cell.border.left.style)      # "thin"
+print(cell.alignment.horizontal)   # "center"
+```
+
+All style objects are immutable value types. Assigning a new style object replaces the cell's style while preserving any other styles already set (e.g., setting `.font` leaves `.fill` and `.border` unchanged). Style deduplication is handled automatically — identical styles share a single XF entry in styles.xml.
+
+Available border styles: `"thin"`, `"medium"`, `"thick"`, `"dashed"`, `"dotted"`, `"double"`, `"hair"`, `"mediumDashed"`, and more (any valid OOXML border style string).
+
+### Hyperlinks
+
+```python
+cell = ws["A1"]
+cell.value = "Visit our site"
+cell.hyperlink = "https://example.com"
+
+# Read back after save/load
+wb2 = openexcel.load_workbook("output.xlsx")
+print(wb2[0]["A1"].hyperlink)   # "https://example.com"
+print(wb2[0]["A1"].value)       # "Visit our site"
+
+# Clear a hyperlink
+cell.hyperlink = None
+```
+
+Hyperlinks are stored in the standard OOXML location (`xl/worksheets/_rels/sheetN.xml.rels`). Both external URLs and internal sheet anchors (e.g. `"#Sheet2!A1"`) are supported. Hyperlinks compose with all other cell properties — a cell can have a hyperlink, a value, a font, and a number format simultaneously.
+
 ### Named ranges
 
 ```python
@@ -267,6 +322,11 @@ Create a new empty workbook.
 |---|---|
 | `.value` | Get/set cell value |
 | `.number_format` | Get/set format string (e.g. `"0.00%"`) |
+| `.font` | Get/set `Font` object |
+| `.fill` | Get/set `PatternFill` object |
+| `.border` | Get/set `Border` object |
+| `.alignment` | Get/set `Alignment` object |
+| `.hyperlink` | Get/set hyperlink URL string, or `None` |
 | `.row` | Row number (1-based) |
 | `.column` | Column number (1-based) |
 | `.coordinate` | A1-style coordinate string |
@@ -286,7 +346,8 @@ Create a new empty workbook.
 | Named ranges | Supported | Supported |
 | Freeze panes / zoom | Supported | Supported |
 | Column/row dimensions | Supported | Supported |
-| Font / fill / border | Not yet supported | Full style API |
+| Font / fill / border / alignment | **Supported** (`Font`, `PatternFill`, `Border`, `Side`, `Alignment`) | Full style API |
+| Hyperlinks | **Supported** (`cell.hyperlink`) | Supported |
 | Conditional formatting | Not yet supported | Supported |
 | Charts / images | Not yet supported | Supported |
 | Data validation | Not yet supported | Supported |
