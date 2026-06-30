@@ -232,6 +232,78 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
         oxl_xmlbuf_cstr(b, "\"/>");
     }
 
+    /* Phase 13: <dataValidations> */
+    if (ws->dv_count > 0) {
+        oxl_xmlbuf_cstr(b, "<dataValidations count=\"");
+        oxl_xmlbuf_uint(b, ws->dv_count);
+        oxl_xmlbuf_cstr(b, "\">");
+        for (uint32_t di = 0; di < ws->dv_count; di++) {
+            const OxlDataValidation *dv = &ws->data_validations[di];
+            oxl_xmlbuf_cstr(b, "<dataValidation");
+            if (dv->type) {
+                oxl_xmlbuf_cstr(b, " type=\"");
+                oxl_xmlbuf_text(b, dv->type);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (dv->dv_operator) {
+                oxl_xmlbuf_cstr(b, " operator=\"");
+                oxl_xmlbuf_text(b, dv->dv_operator);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (dv->allow_blank)
+                oxl_xmlbuf_cstr(b, " allowBlank=\"1\"");
+            if (dv->show_drop_down)
+                oxl_xmlbuf_cstr(b, " showDropDown=\"1\"");
+            if (dv->show_error_message)
+                oxl_xmlbuf_cstr(b, " showErrorMessage=\"1\"");
+            if (dv->error_style) {
+                oxl_xmlbuf_cstr(b, " errorStyle=\"");
+                oxl_xmlbuf_text(b, dv->error_style);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (dv->error_title) {
+                oxl_xmlbuf_cstr(b, " errorTitle=\"");
+                oxl_xmlbuf_text(b, dv->error_title);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (dv->error_message) {
+                oxl_xmlbuf_cstr(b, " error=\"");
+                oxl_xmlbuf_text(b, dv->error_message);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (dv->show_input_message)
+                oxl_xmlbuf_cstr(b, " showInputMessage=\"1\"");
+            if (dv->prompt_title) {
+                oxl_xmlbuf_cstr(b, " promptTitle=\"");
+                oxl_xmlbuf_text(b, dv->prompt_title);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (dv->prompt_message) {
+                oxl_xmlbuf_cstr(b, " prompt=\"");
+                oxl_xmlbuf_text(b, dv->prompt_message);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (dv->sqref) {
+                oxl_xmlbuf_cstr(b, " sqref=\"");
+                oxl_xmlbuf_text(b, dv->sqref);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            oxl_xmlbuf_raw(b, ">", 1);
+            if (dv->formula1) {
+                oxl_xmlbuf_cstr(b, "<formula1>");
+                oxl_xmlbuf_text(b, dv->formula1);
+                oxl_xmlbuf_cstr(b, "</formula1>");
+            }
+            if (dv->formula2) {
+                oxl_xmlbuf_cstr(b, "<formula2>");
+                oxl_xmlbuf_text(b, dv->formula2);
+                oxl_xmlbuf_cstr(b, "</formula2>");
+            }
+            oxl_xmlbuf_cstr(b, "</dataValidation>");
+        }
+        oxl_xmlbuf_cstr(b, "</dataValidations>");
+    }
+
     /* Phase 8: <hyperlinks> */
     {
         int has_hyperlinks = 0;

@@ -24,6 +24,7 @@ static PyTypeObject PyPatternFillType;
 static PyTypeObject PySideType;
 static PyTypeObject PyBorderType;
 static PyTypeObject PyAlignmentType;
+static PyTypeObject PyXlDataValidationType;
 
 /* ========== PyWorkbookObject ========== */
 
@@ -1048,6 +1049,196 @@ static PyTypeObject PyAlignmentType = {
     .tp_getset    = align_getset,
 };
 
+/* ---- PyXlDataValidationObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    char *dv_type;
+    char *dv_operator;
+    char *formula1;
+    char *formula2;
+    char *sqref;
+    char *error_message;
+    char *error_title;
+    char *error_style;
+    char *prompt_message;
+    char *prompt_title;
+    int   allow_blank;
+    int   show_drop_down;
+    int   show_error_message;
+    int   show_input_message;
+} PyXlDataValidationObject;
+
+static void dv_dealloc(PyXlDataValidationObject *self) {
+    free(self->dv_type);
+    free(self->dv_operator);
+    free(self->formula1);
+    free(self->formula2);
+    free(self->sqref);
+    free(self->error_message);
+    free(self->error_title);
+    free(self->error_style);
+    free(self->prompt_message);
+    free(self->prompt_title);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *dv_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyXlDataValidationObject *self = (PyXlDataValidationObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->dv_type        = NULL;
+        self->dv_operator    = NULL;
+        self->formula1       = NULL;
+        self->formula2       = NULL;
+        self->sqref          = NULL;
+        self->error_message  = NULL;
+        self->error_title    = NULL;
+        self->error_style    = NULL;
+        self->prompt_message = NULL;
+        self->prompt_title   = NULL;
+        self->allow_blank        = 1;  /* default True */
+        self->show_drop_down     = 0;
+        self->show_error_message = 0;
+        self->show_input_message = 0;
+    }
+    return (PyObject *)self;
+}
+
+static int dv_init(PyXlDataValidationObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {
+        "type", "formula1", "formula2", "sqref",
+        "allow_blank", "show_drop_down",
+        "error_title", "error_message", "error_style",
+        "prompt_title", "prompt_message",
+        "show_error_message", "show_input_message",
+        "operator",
+        NULL
+    };
+    const char *dv_type    = NULL;
+    const char *formula1   = NULL;
+    const char *formula2   = NULL;
+    const char *sqref      = NULL;
+    const char *error_title   = NULL;
+    const char *error_message = NULL;
+    const char *error_style   = NULL;
+    const char *prompt_title   = NULL;
+    const char *prompt_message = NULL;
+    const char *dv_operator = NULL;
+    int allow_blank        = 1;
+    int show_drop_down     = 0;
+    int show_error_message = 0;
+    int show_input_message = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kw,
+            "|zzzziizzzzziiiz", kwlist,
+            &dv_type, &formula1, &formula2, &sqref,
+            &allow_blank, &show_drop_down,
+            &error_title, &error_message, &error_style,
+            &prompt_title, &prompt_message,
+            &show_error_message, &show_input_message,
+            &dv_operator))
+        return -1;
+
+    free(self->dv_type);        self->dv_type        = dv_type        ? strdup(dv_type)        : NULL;
+    free(self->dv_operator);    self->dv_operator    = dv_operator    ? strdup(dv_operator)    : NULL;
+    free(self->formula1);       self->formula1       = formula1       ? strdup(formula1)       : NULL;
+    free(self->formula2);       self->formula2       = formula2       ? strdup(formula2)       : NULL;
+    free(self->sqref);          self->sqref          = sqref          ? strdup(sqref)          : NULL;
+    free(self->error_title);    self->error_title    = error_title    ? strdup(error_title)    : NULL;
+    free(self->error_message);  self->error_message  = error_message  ? strdup(error_message)  : NULL;
+    free(self->error_style);    self->error_style    = error_style    ? strdup(error_style)    : NULL;
+    free(self->prompt_title);   self->prompt_title   = prompt_title   ? strdup(prompt_title)   : NULL;
+    free(self->prompt_message); self->prompt_message = prompt_message ? strdup(prompt_message) : NULL;
+    self->allow_blank        = allow_blank;
+    self->show_drop_down     = show_drop_down;
+    self->show_error_message = show_error_message;
+    self->show_input_message = show_input_message;
+    return 0;
+}
+
+static PyObject *dv_get_type(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->dv_type) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->dv_type);
+}
+static PyObject *dv_get_operator(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->dv_operator) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->dv_operator);
+}
+static PyObject *dv_get_formula1(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->formula1) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->formula1);
+}
+static PyObject *dv_get_formula2(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->formula2) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->formula2);
+}
+static PyObject *dv_get_sqref(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->sqref) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->sqref);
+}
+static PyObject *dv_get_error_message(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->error_message) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->error_message);
+}
+static PyObject *dv_get_error_title(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->error_title) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->error_title);
+}
+static PyObject *dv_get_error_style(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->error_style) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->error_style);
+}
+static PyObject *dv_get_prompt_message(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->prompt_message) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->prompt_message);
+}
+static PyObject *dv_get_prompt_title(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    if (!self->prompt_title) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->prompt_title);
+}
+static PyObject *dv_get_allow_blank(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->allow_blank);
+}
+static PyObject *dv_get_show_drop_down(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->show_drop_down);
+}
+static PyObject *dv_get_show_error_message(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->show_error_message);
+}
+static PyObject *dv_get_show_input_message(PyXlDataValidationObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->show_input_message);
+}
+
+static PyGetSetDef dv_getset[] = {
+    {"type",               (getter)dv_get_type,               NULL, "Validation type", NULL},
+    {"operator",           (getter)dv_get_operator,           NULL, "Operator", NULL},
+    {"formula1",           (getter)dv_get_formula1,           NULL, "Formula 1", NULL},
+    {"formula2",           (getter)dv_get_formula2,           NULL, "Formula 2", NULL},
+    {"sqref",              (getter)dv_get_sqref,              NULL, "Cell range", NULL},
+    {"error_message",      (getter)dv_get_error_message,      NULL, "Error message", NULL},
+    {"error_title",        (getter)dv_get_error_title,        NULL, "Error title", NULL},
+    {"error_style",        (getter)dv_get_error_style,        NULL, "Error style", NULL},
+    {"prompt_message",     (getter)dv_get_prompt_message,     NULL, "Prompt message", NULL},
+    {"prompt_title",       (getter)dv_get_prompt_title,       NULL, "Prompt title", NULL},
+    {"allow_blank",        (getter)dv_get_allow_blank,        NULL, "Allow blank", NULL},
+    {"show_drop_down",     (getter)dv_get_show_drop_down,     NULL, "Show drop-down (False=show)", NULL},
+    {"show_error_message", (getter)dv_get_show_error_message, NULL, "Show error message", NULL},
+    {"show_input_message", (getter)dv_get_show_input_message, NULL, "Show input message", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyXlDataValidationType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.DataValidation",
+    .tp_basicsize = sizeof(PyXlDataValidationObject),
+    .tp_dealloc   = (destructor)dv_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = dv_new,
+    .tp_init      = (initproc)dv_init,
+    .tp_getset    = dv_getset,
+};
+
 /* ========== Phase 3: Cell XF context helper ========== */
 
 static void get_cell_xf_context(PyXlCellObject *self,
@@ -1897,6 +2088,64 @@ static int worksheet_set_auto_filter_ref(PyWorksheetObject *self, PyObject *v, v
     return self->ws->auto_filter_ref ? 0 : (PyErr_NoMemory(), -1);
 }
 
+/* ── Phase 13: Data Validations ──────────────────────────────────────────── */
+
+static PyObject *ws_add_data_validation(PyObject *self, PyObject *args) {
+    PyObject *dv_obj;
+    if (!PyArg_ParseTuple(args, "O!", &PyXlDataValidationType, &dv_obj))
+        return NULL;
+    PyXlDataValidationObject *dv = (PyXlDataValidationObject *)dv_obj;
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    OxlDataValidation cdv;
+    memset(&cdv, 0, sizeof(cdv));
+    cdv.type               = dv->dv_type;
+    cdv.dv_operator        = dv->dv_operator;
+    cdv.formula1           = dv->formula1;
+    cdv.formula2           = dv->formula2;
+    cdv.sqref              = dv->sqref;
+    cdv.error_message      = dv->error_message;
+    cdv.error_title        = dv->error_title;
+    cdv.error_style        = dv->error_style;
+    cdv.prompt_message     = dv->prompt_message;
+    cdv.prompt_title       = dv->prompt_title;
+    cdv.allow_blank        = (uint8_t)dv->allow_blank;
+    cdv.show_drop_down     = (uint8_t)dv->show_drop_down;
+    cdv.show_error_message = (uint8_t)dv->show_error_message;
+    cdv.show_input_message = (uint8_t)dv->show_input_message;
+    if (oxl_worksheet_add_data_validation(ws, &cdv) < 0) {
+        PyErr_NoMemory(); return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *ws_get_data_validations(PyObject *self, void *closure) {
+    (void)closure;
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyObject *list = PyList_New((Py_ssize_t)ws->dv_count);
+    if (!list) return NULL;
+    for (uint32_t i = 0; i < ws->dv_count; i++) {
+        const OxlDataValidation *dv = &ws->data_validations[i];
+        PyXlDataValidationObject *obj = PyObject_New(PyXlDataValidationObject, &PyXlDataValidationType);
+        if (!obj) { Py_DECREF(list); return NULL; }
+        obj->dv_type        = dv->type           ? strdup(dv->type)           : NULL;
+        obj->dv_operator    = dv->dv_operator     ? strdup(dv->dv_operator)     : NULL;
+        obj->formula1       = dv->formula1        ? strdup(dv->formula1)        : NULL;
+        obj->formula2       = dv->formula2        ? strdup(dv->formula2)        : NULL;
+        obj->sqref          = dv->sqref           ? strdup(dv->sqref)           : NULL;
+        obj->error_message  = dv->error_message   ? strdup(dv->error_message)   : NULL;
+        obj->error_title    = dv->error_title     ? strdup(dv->error_title)     : NULL;
+        obj->error_style    = dv->error_style     ? strdup(dv->error_style)     : NULL;
+        obj->prompt_message = dv->prompt_message  ? strdup(dv->prompt_message)  : NULL;
+        obj->prompt_title   = dv->prompt_title    ? strdup(dv->prompt_title)    : NULL;
+        obj->allow_blank        = dv->allow_blank;
+        obj->show_drop_down     = dv->show_drop_down;
+        obj->show_error_message = dv->show_error_message;
+        obj->show_input_message = dv->show_input_message;
+        PyList_SET_ITEM(list, (Py_ssize_t)i, (PyObject *)obj);
+    }
+    return list;
+}
+
 static void worksheet_dealloc(PyWorksheetObject *self) {
     Py_XDECREF(self->owner);
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -1910,7 +2159,8 @@ static PyMethodDef worksheet_methods[] = {
     {"merge_cells",      (PyCFunction)worksheet_merge_cells,    METH_VARARGS,  "merge_cells('A1:C3')"},
     {"unmerge_cells",    (PyCFunction)worksheet_unmerge_cells,  METH_VARARGS,  "unmerge_cells('A1:C3')"},
     {"set_column_width", (PyCFunction)(void(*)(void))worksheet_set_column_width, METH_VARARGS|METH_KEYWORDS, "set_column_width(col, width, hidden=False)"},
-    {"set_row_height",   (PyCFunction)(void(*)(void))worksheet_set_row_height,   METH_VARARGS|METH_KEYWORDS, "set_row_height(row, height, hidden=False)"},
+    {"set_row_height",         (PyCFunction)(void(*)(void))worksheet_set_row_height,   METH_VARARGS|METH_KEYWORDS, "set_row_height(row, height, hidden=False)"},
+    {"add_data_validation",    (PyCFunction)ws_add_data_validation,                    METH_VARARGS,               "add_data_validation(dv)"},
     {NULL, NULL}
 };
 
@@ -1923,7 +2173,8 @@ static PyGetSetDef worksheet_getset[] = {
     {"zoom_scale",      (getter)worksheet_get_zoom_scale,      (setter)worksheet_set_zoom_scale,      "Zoom scale %",       NULL},
     {"show_gridlines",  (getter)worksheet_get_show_gridlines,  (setter)worksheet_set_show_gridlines,  "Show gridlines",     NULL},
     {"tab_color",       (getter)worksheet_get_tab_color,       (setter)worksheet_set_tab_color,       "Tab color hex",      NULL},
-    {"auto_filter_ref", (getter)worksheet_get_auto_filter_ref, (setter)worksheet_set_auto_filter_ref, "Auto-filter range",  NULL},
+    {"auto_filter_ref",   (getter)worksheet_get_auto_filter_ref, (setter)worksheet_set_auto_filter_ref, "Auto-filter range",  NULL},
+    {"data_validations",  (getter)ws_get_data_validations,       NULL,                                  "Data validations",   NULL},
     {NULL}
 };
 
@@ -2180,7 +2431,8 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     if (PyType_Ready(&PyPatternFillType) < 0) return NULL;
     if (PyType_Ready(&PySideType) < 0)        return NULL;
     if (PyType_Ready(&PyBorderType) < 0)      return NULL;
-    if (PyType_Ready(&PyAlignmentType) < 0)   return NULL;
+    if (PyType_Ready(&PyAlignmentType) < 0)          return NULL;
+    if (PyType_Ready(&PyXlDataValidationType) < 0)   return NULL;
 
     PyObject *mod = PyModule_Create(&moduledef);
     if (!mod) return NULL;
@@ -2222,6 +2474,11 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     Py_INCREF(&PyAlignmentType);
     if (PyModule_AddObject(mod, "Alignment", (PyObject *)&PyAlignmentType) < 0) {
         Py_DECREF(&PyAlignmentType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyXlDataValidationType);
+    if (PyModule_AddObject(mod, "DataValidation", (PyObject *)&PyXlDataValidationType) < 0) {
+        Py_DECREF(&PyXlDataValidationType); Py_DECREF(mod); return NULL;
     }
 
     return mod;
