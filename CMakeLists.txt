@@ -48,3 +48,4 @@ target_compile_options(_openexcel PRIVATE
 )
 
 install(TARGETS _openexcel DESTINATION openexcel)
+
