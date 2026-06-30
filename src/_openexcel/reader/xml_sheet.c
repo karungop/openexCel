@@ -24,6 +24,9 @@ typedef enum {
     SS_SHEET_VIEW,
     /* Phase 8: hyperlinks */
     SS_HYPERLINKS,
+    /* Phase 13: data validations */
+    SS_DATA_VALIDATIONS,
+    SS_DV_FORMULA,       /* inside <formula1> or <formula2>, collects text */
 } SheetState;
 
 #define CBUF_STACK 512
@@ -57,6 +60,9 @@ typedef struct {
     int           error;
     /* Phase 8: hyperlink rels (NULL if no rels file for this sheet) */
     const OxlHyperlinkRels *rels;
+    /* Phase 13: data validation accumulator */
+    OxlDataValidation cur_dv;
+    int               cur_dv_formula_slot; /* 1 = formula1, 2 = formula2 */
 } SheetCtx;
 
 /* Parse "B5" → row=4, col=1 */
@@ -242,6 +248,10 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
         else if (strcmp(name, "hyperlinks") == 0) {
             c->state = SS_HYPERLINKS;
         }
+        /* Phase 13: data validations block */
+        else if (strcmp(name, "dataValidations") == 0) {
+            c->state = SS_DATA_VALIDATIONS;
+        }
         break;
 
     /* Phase 8: hyperlink elements */
@@ -272,6 +282,50 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
                 }
             }
         }
+        break;
+
+    /* Phase 13: data validation elements */
+    case SS_DATA_VALIDATIONS:
+        if (strcmp(name, "dataValidation") == 0) {
+            memset(&c->cur_dv, 0, sizeof(c->cur_dv));
+            c->cur_dv_formula_slot = 0;
+            const char *type_s    = attr(attrs, "type");
+            const char *op_s      = attr(attrs, "operator");
+            const char *sqref_s   = attr(attrs, "sqref");
+            const char *ab_s      = attr(attrs, "allowBlank");
+            const char *sdd_s     = attr(attrs, "showDropDown");
+            const char *sem_s     = attr(attrs, "showErrorMessage");
+            const char *sim_s     = attr(attrs, "showInputMessage");
+            const char *et_s      = attr(attrs, "errorTitle");
+            const char *em_s      = attr(attrs, "error");
+            const char *es_s      = attr(attrs, "errorStyle");
+            const char *pt_s      = attr(attrs, "promptTitle");
+            const char *pm_s      = attr(attrs, "prompt");
+            if (type_s)  c->cur_dv.type          = strdup(type_s);
+            if (op_s)    c->cur_dv.dv_operator    = strdup(op_s);
+            if (sqref_s) c->cur_dv.sqref          = strdup(sqref_s);
+            c->cur_dv.allow_blank        = ab_s  && (ab_s[0]  == '1' || strcmp(ab_s,  "true") == 0);
+            c->cur_dv.show_drop_down     = sdd_s && (sdd_s[0] == '1' || strcmp(sdd_s, "true") == 0);
+            c->cur_dv.show_error_message = sem_s && (sem_s[0] == '1' || strcmp(sem_s, "true") == 0);
+            c->cur_dv.show_input_message = sim_s && (sim_s[0] == '1' || strcmp(sim_s, "true") == 0);
+            if (et_s) c->cur_dv.error_title    = strdup(et_s);
+            if (em_s) c->cur_dv.error_message  = strdup(em_s);
+            if (es_s) c->cur_dv.error_style    = strdup(es_s);
+            if (pt_s) c->cur_dv.prompt_title   = strdup(pt_s);
+            if (pm_s) c->cur_dv.prompt_message = strdup(pm_s);
+        } else if (strcmp(name, "formula1") == 0) {
+            cbuf_reset(c);
+            c->cur_dv_formula_slot = 1;
+            c->state = SS_DV_FORMULA;
+        } else if (strcmp(name, "formula2") == 0) {
+            cbuf_reset(c);
+            c->cur_dv_formula_slot = 2;
+            c->state = SS_DV_FORMULA;
+        }
+        break;
+
+    case SS_DV_FORMULA:
+        /* no children expected */
         break;
 
     /* Feature C: sheetViews / sheetView / pane */
@@ -413,11 +467,29 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
     else if (strcmp(name, "hyperlinks") == 0 && c->state == SS_HYPERLINKS) {
         c->state = SS_NONE;
     }
+    /* Phase 13: data validations end */
+    else if (strcmp(name, "formula1") == 0 && c->state == SS_DV_FORMULA &&
+             c->cur_dv_formula_slot == 1) {
+        free(c->cur_dv.formula1);
+        c->cur_dv.formula1 = c->cbuf_len > 0 ? strndup(c->cbuf, c->cbuf_len) : NULL;
+        c->state = SS_DATA_VALIDATIONS;
+    } else if (strcmp(name, "formula2") == 0 && c->state == SS_DV_FORMULA &&
+               c->cur_dv_formula_slot == 2) {
+        free(c->cur_dv.formula2);
+        c->cur_dv.formula2 = c->cbuf_len > 0 ? strndup(c->cbuf, c->cbuf_len) : NULL;
+        c->state = SS_DATA_VALIDATIONS;
+    } else if (strcmp(name, "dataValidation") == 0 && c->state == SS_DATA_VALIDATIONS) {
+        oxl_worksheet_add_data_validation(c->ws, &c->cur_dv);
+        oxl_data_validation_free_fields(&c->cur_dv);
+        memset(&c->cur_dv, 0, sizeof(c->cur_dv));
+    } else if (strcmp(name, "dataValidations") == 0 && c->state == SS_DATA_VALIDATIONS) {
+        c->state = SS_NONE;
+    }
 }
 
 static void XMLCALL sheet_char(void *ud, const char *s, int n) {
     SheetCtx *c = ud;
-    if (c->state == SS_VALUE || c->state == SS_INLINE_T) {
+    if (c->state == SS_VALUE || c->state == SS_INLINE_T || c->state == SS_DV_FORMULA) {
         cbuf_append(c, s, n);
     } else if (c->state == SS_FORMULA) {
         formula_buf_append(c, s, n);

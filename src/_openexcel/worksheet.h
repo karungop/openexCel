@@ -29,6 +29,25 @@ typedef struct {
     uint16_t max_col;  /* 1-based */
 } OxlMergedCell;
 
+/* Phase 13: Data Validation */
+
+typedef struct {
+    char    *type;           /* "list", "whole", "decimal", "date", "time", "textLength", "custom" */
+    char    *dv_operator;    /* "between", "notBetween", "equal", "notEqual", "greaterThan", etc. */
+    char    *formula1;       /* first formula/value */
+    char    *formula2;       /* second formula/value (for range checks) */
+    char    *sqref;          /* cell range, e.g. "A1:A10" */
+    char    *error_message;
+    char    *error_title;
+    char    *error_style;    /* "stop", "warning", "information" */
+    char    *prompt_message;
+    char    *prompt_title;
+    uint8_t  allow_blank;
+    uint8_t  show_drop_down;       /* 1 = hide dropdown (XML attr "showDropDown"="1" means hidden) */
+    uint8_t  show_error_message;
+    uint8_t  show_input_message;
+} OxlDataValidation;
+
 /* ── Worksheet ───────────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -63,6 +82,11 @@ typedef struct {
 
     /* Feature E: Auto-Filter */
     char *auto_filter_ref;    /* e.g. "A1:D1"; NULL if none (heap-allocated) */
+
+    /* Phase 13: Data Validations */
+    OxlDataValidation *data_validations;
+    uint32_t           dv_count;
+    uint32_t           dv_cap;
 } OxlWorksheet;
 
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path);
@@ -80,3 +104,7 @@ int oxl_worksheet_set_row_dim(OxlWorksheet *ws, uint32_t row_idx, double height,
 /* Feature B helper */
 int oxl_worksheet_add_merge(OxlWorksheet *ws, uint32_t min_row, uint16_t min_col,
                              uint32_t max_row, uint16_t max_col);
+
+/* Phase 13: Data Validation helpers */
+void oxl_data_validation_free_fields(OxlDataValidation *dv);
+int  oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation *dv);

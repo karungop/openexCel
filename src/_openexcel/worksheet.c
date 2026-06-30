@@ -2,6 +2,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+void oxl_data_validation_free_fields(OxlDataValidation *dv) {
+    free(dv->type);
+    free(dv->dv_operator);
+    free(dv->formula1);
+    free(dv->formula2);
+    free(dv->sqref);
+    free(dv->error_message);
+    free(dv->error_title);
+    free(dv->error_style);
+    free(dv->prompt_message);
+    free(dv->prompt_title);
+}
+
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path) {
     OxlWorksheet *ws = calloc(1, sizeof(OxlWorksheet));
     if (!ws) return NULL;
@@ -28,6 +41,10 @@ void oxl_worksheet_free(OxlWorksheet *ws) {
     free(ws->freeze_panes);
     /* Feature E */
     free(ws->auto_filter_ref);
+    /* Phase 13: data validations */
+    for (uint32_t i = 0; i < ws->dv_count; i++)
+        oxl_data_validation_free_fields(&ws->data_validations[i]);
+    free(ws->data_validations);
     free(ws);
 }
 
@@ -123,5 +140,34 @@ int oxl_worksheet_add_merge(OxlWorksheet *ws, uint32_t min_row, uint16_t min_col
     m->min_col = min_col;
     m->max_row = max_row;
     m->max_col = max_col;
+    return 0;
+}
+
+/* ── Phase 13: Data Validations ──────────────────────────────────────────── */
+
+int oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation *dv) {
+    if (ws->dv_count == ws->dv_cap) {
+        uint32_t cap = ws->dv_cap ? ws->dv_cap * 2 : 8;
+        OxlDataValidation *p = realloc(ws->data_validations, cap * sizeof(OxlDataValidation));
+        if (!p) return -1;
+        ws->data_validations = p;
+        ws->dv_cap = cap;
+    }
+    OxlDataValidation *dst = &ws->data_validations[ws->dv_count++];
+    memset(dst, 0, sizeof(*dst));
+    dst->type               = dv->type           ? strdup(dv->type)           : NULL;
+    dst->dv_operator        = dv->dv_operator     ? strdup(dv->dv_operator)     : NULL;
+    dst->formula1           = dv->formula1        ? strdup(dv->formula1)        : NULL;
+    dst->formula2           = dv->formula2        ? strdup(dv->formula2)        : NULL;
+    dst->sqref              = dv->sqref           ? strdup(dv->sqref)           : NULL;
+    dst->error_message      = dv->error_message   ? strdup(dv->error_message)   : NULL;
+    dst->error_title        = dv->error_title     ? strdup(dv->error_title)     : NULL;
+    dst->error_style        = dv->error_style     ? strdup(dv->error_style)     : NULL;
+    dst->prompt_message     = dv->prompt_message  ? strdup(dv->prompt_message)  : NULL;
+    dst->prompt_title       = dv->prompt_title    ? strdup(dv->prompt_title)    : NULL;
+    dst->allow_blank        = dv->allow_blank;
+    dst->show_drop_down     = dv->show_drop_down;
+    dst->show_error_message = dv->show_error_message;
+    dst->show_input_message = dv->show_input_message;
     return 0;
 }
