@@ -1403,6 +1403,54 @@ static int cell_set_alignment(PyXlCellObject *self, PyObject *value, void *Py_UN
     return ensure_cell_with_style(self, new_xf);
 }
 
+static PyObject *cell_get_hyperlink(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    if (!c || !c->hyperlink) Py_RETURN_NONE;
+    return PyUnicode_FromString(c->hyperlink);
+}
+
+static int cell_set_hyperlink(PyXlCellObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value || value == Py_None) {
+        OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+        if (c) { free(c->hyperlink); c->hyperlink = NULL; }
+        return 0;
+    }
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "hyperlink must be a string or None");
+        return -1;
+    }
+    const char *url = PyUnicode_AsUTF8(value);
+    if (!url) return -1;
+
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    if (c) {
+        free(c->hyperlink);
+        c->hyperlink = strdup(url);
+    } else {
+        /* Create a stub EMPTY cell to carry the hyperlink */
+        OxlCell newc;
+        memset(&newc, 0, sizeof(newc));
+        newc.row = self->row;
+        newc.col = self->col;
+        newc.hyperlink = strdup(url);
+        newc.type = OXL_CELL_EMPTY;
+        uint32_t pos = ws_find_pos(self->ws, self->row, self->col);
+        if (self->ws->cell_count >= self->ws->cell_capacity) {
+            uint32_t new_cap = self->ws->cell_capacity == 0 ? 8 : self->ws->cell_capacity * 2;
+            OxlCell *nc = (OxlCell *)realloc(self->ws->cells, new_cap * sizeof(OxlCell));
+            if (!nc) { free(newc.hyperlink); PyErr_NoMemory(); return -1; }
+            self->ws->cells = nc;
+            self->ws->cell_capacity = new_cap;
+        }
+        if (pos < self->ws->cell_count)
+            memmove(&self->ws->cells[pos + 1], &self->ws->cells[pos],
+                    (self->ws->cell_count - pos) * sizeof(OxlCell));
+        self->ws->cells[pos] = newc;
+        self->ws->cell_count++;
+    }
+    return 0;
+}
+
 static PyObject *cell_repr(PyXlCellObject *self) {
     char col_str[8];
     col_idx_to_str((int)(self->col + 1), col_str);
@@ -1424,6 +1472,7 @@ static PyGetSetDef cell_getset[] = {
     {"fill",          (getter)cell_get_fill,            (setter)cell_set_fill,           "Cell fill", NULL},
     {"border",        (getter)cell_get_border,          (setter)cell_set_border,         "Cell border", NULL},
     {"alignment",     (getter)cell_get_alignment,       (setter)cell_set_alignment,      "Cell alignment", NULL},
+    {"hyperlink",     (getter)cell_get_hyperlink,       (setter)cell_set_hyperlink,      "Cell hyperlink URL", NULL},
     {NULL}
 };
 
