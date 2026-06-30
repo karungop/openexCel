@@ -1131,7 +1131,7 @@ static int dv_init(PyXlDataValidationObject *self, PyObject *args, PyObject *kw)
     int show_input_message = 0;
 
     if (!PyArg_ParseTupleAndKeywords(args, kw,
-            "|zzzziizzzzziiiz", kwlist,
+            "|zzzziizzzzziiz", kwlist,
             &dv_type, &formula1, &formula2, &sqref,
             &allow_blank, &show_drop_down,
             &error_title, &error_message, &error_style,
