@@ -123,7 +123,7 @@ static void rich_append(SheetCtx *c, const char *s, size_t n) {
 }
 
 static void emit_cell(SheetCtx *c) {
-    if (c->cbuf_len == 0 && !c->cur_is_inline && c->formula_len == 0) return;
+    if (c->cbuf_len == 0 && !c->cur_is_inline && c->formula_len == 0 && c->cur_style == 0) return;
 
     OxlCell cell;
     memset(&cell, 0, sizeof(cell));

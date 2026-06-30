@@ -19,6 +19,11 @@ static PyTypeObject PyWorkbookType;
 static PyTypeObject PyWorksheetType;
 static PyTypeObject PyRowIteratorType;
 static PyTypeObject PyXlCellType;
+static PyTypeObject PyFontType;
+static PyTypeObject PyPatternFillType;
+static PyTypeObject PySideType;
+static PyTypeObject PyBorderType;
+static PyTypeObject PyAlignmentType;
 
 /* ========== PyWorkbookObject ========== */
 
@@ -503,6 +508,901 @@ static int cell_set_number_format(PyXlCellObject *self, PyObject *value, void *P
     return 0;
 }
 
+/* ========== Phase 3: Style Python types ========== */
+
+/* ---- Color helpers ---- */
+
+static uint32_t parse_color_str(const char *s) {
+    if (!s || !*s) return 0;
+    if (*s == '#') s++;
+    size_t len = strlen(s);
+    unsigned long val = strtoul(s, NULL, 16);
+    if (len <= 6) {
+        val |= 0xFF000000UL;
+    }
+    return (uint32_t)val;
+}
+
+static PyObject *color_to_pystr(uint32_t argb) {
+    if (argb == 0) Py_RETURN_NONE;
+    char buf[9];
+    snprintf(buf, sizeof(buf), "%08X", argb);
+    return PyUnicode_FromString(buf);
+}
+
+/* ---- PyFontObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    char    *name;
+    double   size;
+    char    *color;
+    uint8_t  bold;
+    uint8_t  italic;
+    uint8_t  underline; /* 0=none, 1=single, 2=double */
+} PyFontObject;
+
+static void font_dealloc(PyFontObject *self) {
+    free(self->name);
+    free(self->color);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *font_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyFontObject *self = (PyFontObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->name = NULL;
+        self->size = 11.0;
+        self->color = NULL;
+        self->bold = 0;
+        self->italic = 0;
+        self->underline = 0;
+    }
+    return (PyObject *)self;
+}
+
+static int font_init(PyFontObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"name","size","bold","italic","underline","color", NULL};
+    const char *name = NULL;
+    double size = 11.0;
+    int bold = 0, italic = 0;
+    PyObject *underline_obj = Py_None;
+    PyObject *color_obj = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|zdiiOO", kwlist,
+                                     &name, &size, &bold, &italic,
+                                     &underline_obj, &color_obj))
+        return -1;
+
+    free(self->name);
+    self->name = name ? strdup(name) : NULL;
+    self->size = size;
+    self->bold = (uint8_t)(bold ? 1 : 0);
+    self->italic = (uint8_t)(italic ? 1 : 0);
+
+    /* underline: None -> 0, "single" -> 1, "double" -> 2 */
+    if (underline_obj == Py_None) {
+        self->underline = 0;
+    } else if (PyUnicode_Check(underline_obj)) {
+        const char *u = PyUnicode_AsUTF8(underline_obj);
+        if (!u) return -1;
+        if (strcmp(u, "single") == 0) self->underline = 1;
+        else if (strcmp(u, "double") == 0) self->underline = 2;
+        else self->underline = 1; /* default to single */
+    } else {
+        PyErr_SetString(PyExc_TypeError, "underline must be None, 'single', or 'double'");
+        return -1;
+    }
+
+    free(self->color);
+    self->color = NULL;
+    if (color_obj != Py_None) {
+        if (!PyUnicode_Check(color_obj)) {
+            PyErr_SetString(PyExc_TypeError, "color must be a string or None");
+            return -1;
+        }
+        const char *c = PyUnicode_AsUTF8(color_obj);
+        if (!c) return -1;
+        self->color = strdup(c);
+        if (!self->color) { PyErr_NoMemory(); return -1; }
+    }
+    return 0;
+}
+
+static PyObject *font_get_name(PyFontObject *self, void *Py_UNUSED(x)) {
+    if (!self->name) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->name);
+}
+static PyObject *font_get_size(PyFontObject *self, void *Py_UNUSED(x)) {
+    return PyFloat_FromDouble(self->size);
+}
+static PyObject *font_get_bold(PyFontObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->bold);
+}
+static PyObject *font_get_italic(PyFontObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->italic);
+}
+static PyObject *font_get_underline(PyFontObject *self, void *Py_UNUSED(x)) {
+    if (self->underline == 0) Py_RETURN_NONE;
+    if (self->underline == 2) return PyUnicode_FromString("double");
+    return PyUnicode_FromString("single");
+}
+static PyObject *font_get_color(PyFontObject *self, void *Py_UNUSED(x)) {
+    if (!self->color) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->color);
+}
+
+static PyObject *font_repr(PyFontObject *self) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "<Font name='%s' size=%.6g bold=%s>",
+        self->name ? self->name : "",
+        self->size,
+        self->bold ? "True" : "False");
+    return PyUnicode_FromString(buf);
+}
+
+static PyGetSetDef font_getset[] = {
+    {"name",      (getter)font_get_name,      NULL, "Font name", NULL},
+    {"size",      (getter)font_get_size,      NULL, "Font size", NULL},
+    {"bold",      (getter)font_get_bold,      NULL, "Bold", NULL},
+    {"italic",    (getter)font_get_italic,    NULL, "Italic", NULL},
+    {"underline", (getter)font_get_underline, NULL, "Underline", NULL},
+    {"color",     (getter)font_get_color,     NULL, "Color ARGB hex", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyFontType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.Font",
+    .tp_basicsize = sizeof(PyFontObject),
+    .tp_dealloc   = (destructor)font_dealloc,
+    .tp_repr      = (reprfunc)font_repr,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = font_new,
+    .tp_init      = (initproc)font_init,
+    .tp_getset    = font_getset,
+};
+
+/* ---- PyPatternFillObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    char *fill_type;
+    char *fg_color;
+    char *bg_color;
+} PyPatternFillObject;
+
+static void patfill_dealloc(PyPatternFillObject *self) {
+    free(self->fill_type);
+    free(self->fg_color);
+    free(self->bg_color);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *patfill_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyPatternFillObject *self = (PyPatternFillObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->fill_type = strdup("none");
+        self->fg_color = NULL;
+        self->bg_color = NULL;
+    }
+    return (PyObject *)self;
+}
+
+static int patfill_init(PyPatternFillObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"fill_type","fgColor","bgColor", NULL};
+    const char *fill_type = "none";
+    PyObject *fg = Py_None, *bg = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|sOO", kwlist, &fill_type, &fg, &bg))
+        return -1;
+
+    free(self->fill_type);
+    self->fill_type = strdup(fill_type);
+
+    free(self->fg_color);
+    self->fg_color = NULL;
+    if (fg != Py_None) {
+        if (!PyUnicode_Check(fg)) { PyErr_SetString(PyExc_TypeError, "fgColor must be a string or None"); return -1; }
+        const char *s = PyUnicode_AsUTF8(fg);
+        if (!s) return -1;
+        self->fg_color = strdup(s);
+        if (!self->fg_color) { PyErr_NoMemory(); return -1; }
+    }
+
+    free(self->bg_color);
+    self->bg_color = NULL;
+    if (bg != Py_None) {
+        if (!PyUnicode_Check(bg)) { PyErr_SetString(PyExc_TypeError, "bgColor must be a string or None"); return -1; }
+        const char *s = PyUnicode_AsUTF8(bg);
+        if (!s) return -1;
+        self->bg_color = strdup(s);
+        if (!self->bg_color) { PyErr_NoMemory(); return -1; }
+    }
+    return 0;
+}
+
+static PyObject *patfill_get_fill_type(PyPatternFillObject *self, void *Py_UNUSED(x)) {
+    if (!self->fill_type) return PyUnicode_FromString("none");
+    return PyUnicode_FromString(self->fill_type);
+}
+static PyObject *patfill_get_fg(PyPatternFillObject *self, void *Py_UNUSED(x)) {
+    if (!self->fg_color) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->fg_color);
+}
+static PyObject *patfill_get_bg(PyPatternFillObject *self, void *Py_UNUSED(x)) {
+    if (!self->bg_color) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->bg_color);
+}
+
+static PyGetSetDef patfill_getset[] = {
+    {"fill_type", (getter)patfill_get_fill_type, NULL, "Fill type", NULL},
+    {"fgColor",   (getter)patfill_get_fg,        NULL, "Foreground color ARGB hex", NULL},
+    {"bgColor",   (getter)patfill_get_bg,        NULL, "Background color ARGB hex", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyPatternFillType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.PatternFill",
+    .tp_basicsize = sizeof(PyPatternFillObject),
+    .tp_dealloc   = (destructor)patfill_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = patfill_new,
+    .tp_init      = (initproc)patfill_init,
+    .tp_getset    = patfill_getset,
+};
+
+/* ---- PySideObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    char *style;
+    char *color;
+} PySideObject;
+
+static void side_dealloc(PySideObject *self) {
+    free(self->style);
+    free(self->color);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *side_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PySideObject *self = (PySideObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->style = NULL;
+        self->color = NULL;
+    }
+    return (PyObject *)self;
+}
+
+static int side_init(PySideObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"style","color", NULL};
+    PyObject *style_obj = Py_None, *color_obj = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|OO", kwlist, &style_obj, &color_obj))
+        return -1;
+
+    free(self->style);
+    self->style = NULL;
+    if (style_obj != Py_None) {
+        if (!PyUnicode_Check(style_obj)) { PyErr_SetString(PyExc_TypeError, "style must be a string or None"); return -1; }
+        const char *s = PyUnicode_AsUTF8(style_obj);
+        if (!s) return -1;
+        self->style = strdup(s);
+        if (!self->style) { PyErr_NoMemory(); return -1; }
+    }
+
+    free(self->color);
+    self->color = NULL;
+    if (color_obj != Py_None) {
+        if (!PyUnicode_Check(color_obj)) { PyErr_SetString(PyExc_TypeError, "color must be a string or None"); return -1; }
+        const char *s = PyUnicode_AsUTF8(color_obj);
+        if (!s) return -1;
+        self->color = strdup(s);
+        if (!self->color) { PyErr_NoMemory(); return -1; }
+    }
+    return 0;
+}
+
+static PyObject *side_get_style(PySideObject *self, void *Py_UNUSED(x)) {
+    if (!self->style) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->style);
+}
+static PyObject *side_get_color(PySideObject *self, void *Py_UNUSED(x)) {
+    if (!self->color) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->color);
+}
+
+static PyGetSetDef side_getset[] = {
+    {"style", (getter)side_get_style, NULL, "Border style", NULL},
+    {"color", (getter)side_get_color, NULL, "Color ARGB hex", NULL},
+    {NULL}
+};
+
+static PyTypeObject PySideType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.Side",
+    .tp_basicsize = sizeof(PySideObject),
+    .tp_dealloc   = (destructor)side_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = side_new,
+    .tp_init      = (initproc)side_init,
+    .tp_getset    = side_getset,
+};
+
+/* ---- PyBorderObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *left;
+    PyObject *right;
+    PyObject *top;
+    PyObject *bottom;
+} PyBorderObject;
+
+static int border_traverse(PyBorderObject *self, visitproc visit, void *arg) {
+    Py_VISIT(self->left);
+    Py_VISIT(self->right);
+    Py_VISIT(self->top);
+    Py_VISIT(self->bottom);
+    return 0;
+}
+
+static int border_clear(PyBorderObject *self) {
+    Py_CLEAR(self->left);
+    Py_CLEAR(self->right);
+    Py_CLEAR(self->top);
+    Py_CLEAR(self->bottom);
+    return 0;
+}
+
+static void border_dealloc(PyBorderObject *self) {
+    PyObject_GC_UnTrack(self);
+    border_clear(self);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *border_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyBorderObject *self = (PyBorderObject *)type->tp_alloc(type, 0);
+    if (self) {
+        Py_INCREF(Py_None);
+        self->left = Py_None;
+        Py_INCREF(Py_None);
+        self->right = Py_None;
+        Py_INCREF(Py_None);
+        self->top = Py_None;
+        Py_INCREF(Py_None);
+        self->bottom = Py_None;
+    }
+    return (PyObject *)self;
+}
+
+static int border_init(PyBorderObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"left","right","top","bottom", NULL};
+    PyObject *left = Py_None, *right = Py_None, *top = Py_None, *bottom = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|OOOO", kwlist,
+                                     &left, &right, &top, &bottom))
+        return -1;
+
+    /* Validate each is None or a PySideObject */
+    if (left != Py_None && !PyObject_TypeCheck(left, &PySideType)) {
+        PyErr_SetString(PyExc_TypeError, "left must be a Side or None"); return -1; }
+    if (right != Py_None && !PyObject_TypeCheck(right, &PySideType)) {
+        PyErr_SetString(PyExc_TypeError, "right must be a Side or None"); return -1; }
+    if (top != Py_None && !PyObject_TypeCheck(top, &PySideType)) {
+        PyErr_SetString(PyExc_TypeError, "top must be a Side or None"); return -1; }
+    if (bottom != Py_None && !PyObject_TypeCheck(bottom, &PySideType)) {
+        PyErr_SetString(PyExc_TypeError, "bottom must be a Side or None"); return -1; }
+
+    Py_INCREF(left);   Py_DECREF(self->left);   self->left   = left;
+    Py_INCREF(right);  Py_DECREF(self->right);  self->right  = right;
+    Py_INCREF(top);    Py_DECREF(self->top);    self->top    = top;
+    Py_INCREF(bottom); Py_DECREF(self->bottom); self->bottom = bottom;
+    return 0;
+}
+
+static PyObject *border_get_left(PyBorderObject *self, void *Py_UNUSED(x)) {
+    Py_INCREF(self->left); return self->left;
+}
+static PyObject *border_get_right(PyBorderObject *self, void *Py_UNUSED(x)) {
+    Py_INCREF(self->right); return self->right;
+}
+static PyObject *border_get_top(PyBorderObject *self, void *Py_UNUSED(x)) {
+    Py_INCREF(self->top); return self->top;
+}
+static PyObject *border_get_bottom(PyBorderObject *self, void *Py_UNUSED(x)) {
+    Py_INCREF(self->bottom); return self->bottom;
+}
+
+static PyGetSetDef border_getset[] = {
+    {"left",   (getter)border_get_left,   NULL, "Left side", NULL},
+    {"right",  (getter)border_get_right,  NULL, "Right side", NULL},
+    {"top",    (getter)border_get_top,    NULL, "Top side", NULL},
+    {"bottom", (getter)border_get_bottom, NULL, "Bottom side", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyBorderType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.Border",
+    .tp_basicsize = sizeof(PyBorderObject),
+    .tp_dealloc   = (destructor)border_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .tp_new       = border_new,
+    .tp_init      = (initproc)border_init,
+    .tp_getset    = border_getset,
+    .tp_traverse  = (traverseproc)border_traverse,
+    .tp_clear     = (inquiry)border_clear,
+};
+
+/* ---- PyAlignmentObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    char    *horizontal;
+    char    *vertical;
+    int32_t  indent;
+    int32_t  text_rotation;
+    uint8_t  wrap_text;
+    uint8_t  shrink_to_fit;
+} PyAlignmentObject;
+
+static void align_dealloc(PyAlignmentObject *self) {
+    free(self->horizontal);
+    free(self->vertical);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *align_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyAlignmentObject *self = (PyAlignmentObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->horizontal = NULL;
+        self->vertical = NULL;
+        self->indent = 0;
+        self->text_rotation = 0;
+        self->wrap_text = 0;
+        self->shrink_to_fit = 0;
+    }
+    return (PyObject *)self;
+}
+
+static int align_init(PyAlignmentObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"horizontal","vertical","wrap_text","indent",
+                              "text_rotation","shrink_to_fit", NULL};
+    PyObject *horiz = Py_None, *vert = Py_None;
+    int wrap_text = 0, indent = 0, text_rotation = 0, shrink_to_fit = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|OOiiii", kwlist,
+                                     &horiz, &vert, &wrap_text, &indent,
+                                     &text_rotation, &shrink_to_fit))
+        return -1;
+
+    free(self->horizontal);
+    self->horizontal = NULL;
+    if (horiz != Py_None) {
+        if (!PyUnicode_Check(horiz)) { PyErr_SetString(PyExc_TypeError, "horizontal must be str or None"); return -1; }
+        const char *s = PyUnicode_AsUTF8(horiz);
+        if (!s) return -1;
+        self->horizontal = strdup(s);
+        if (!self->horizontal) { PyErr_NoMemory(); return -1; }
+    }
+
+    free(self->vertical);
+    self->vertical = NULL;
+    if (vert != Py_None) {
+        if (!PyUnicode_Check(vert)) { PyErr_SetString(PyExc_TypeError, "vertical must be str or None"); return -1; }
+        const char *s = PyUnicode_AsUTF8(vert);
+        if (!s) return -1;
+        self->vertical = strdup(s);
+        if (!self->vertical) { PyErr_NoMemory(); return -1; }
+    }
+
+    self->wrap_text = (uint8_t)(wrap_text ? 1 : 0);
+    self->indent = (int32_t)indent;
+    self->text_rotation = (int32_t)text_rotation;
+    self->shrink_to_fit = (uint8_t)(shrink_to_fit ? 1 : 0);
+    return 0;
+}
+
+static PyObject *align_get_horizontal(PyAlignmentObject *self, void *Py_UNUSED(x)) {
+    if (!self->horizontal) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->horizontal);
+}
+static PyObject *align_get_vertical(PyAlignmentObject *self, void *Py_UNUSED(x)) {
+    if (!self->vertical) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->vertical);
+}
+static PyObject *align_get_wrap_text(PyAlignmentObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->wrap_text);
+}
+static PyObject *align_get_indent(PyAlignmentObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->indent);
+}
+static PyObject *align_get_text_rotation(PyAlignmentObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->text_rotation);
+}
+static PyObject *align_get_shrink_to_fit(PyAlignmentObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->shrink_to_fit);
+}
+
+static PyGetSetDef align_getset[] = {
+    {"horizontal",    (getter)align_get_horizontal,    NULL, "Horizontal alignment", NULL},
+    {"vertical",      (getter)align_get_vertical,      NULL, "Vertical alignment", NULL},
+    {"wrap_text",     (getter)align_get_wrap_text,     NULL, "Wrap text", NULL},
+    {"indent",        (getter)align_get_indent,        NULL, "Indent", NULL},
+    {"text_rotation", (getter)align_get_text_rotation, NULL, "Text rotation", NULL},
+    {"shrink_to_fit", (getter)align_get_shrink_to_fit, NULL, "Shrink to fit", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyAlignmentType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.Alignment",
+    .tp_basicsize = sizeof(PyAlignmentObject),
+    .tp_dealloc   = (destructor)align_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = align_new,
+    .tp_init      = (initproc)align_init,
+    .tp_getset    = align_getset,
+};
+
+/* ========== Phase 3: Cell XF context helper ========== */
+
+static void get_cell_xf_context(PyXlCellObject *self,
+                                  uint16_t *out_xf_idx,
+                                  const char **out_fmt_str,
+                                  uint32_t *out_font_id,
+                                  uint32_t *out_fill_id,
+                                  uint32_t *out_border_id,
+                                  OxlAlignDef *out_align) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    *out_xf_idx = c ? c->style_idx : 0;
+    const OxlXfRecord *xf = oxl_styles_get_xf(&self->wb->styles, *out_xf_idx);
+    *out_fmt_str = xf ? xf->fmt_str : NULL;
+    *out_font_id = xf ? xf->font_id : 0;
+    *out_fill_id = xf ? xf->fill_id : 0;
+    *out_border_id = xf ? xf->border_id : 0;
+    if (out_align) {
+        if (xf) *out_align = xf->align;
+        else memset(out_align, 0, sizeof(*out_align));
+    }
+}
+
+/* Helper: ensure a cell slot exists (create stub EMPTY cell if needed) and set style_idx */
+static int ensure_cell_with_style(PyXlCellObject *self, uint16_t xf_idx) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    if (c) {
+        c->style_idx = xf_idx;
+        return 0;
+    }
+    /* Create stub EMPTY cell to carry the style */
+    OxlCell newc;
+    memset(&newc, 0, sizeof(newc));
+    newc.row = self->row;
+    newc.col = self->col;
+    newc.style_idx = xf_idx;
+    newc.type = OXL_CELL_EMPTY;
+    uint32_t pos = ws_find_pos(self->ws, self->row, self->col);
+    if (self->ws->cell_count >= self->ws->cell_capacity) {
+        uint32_t new_cap = self->ws->cell_capacity == 0 ? 8 : self->ws->cell_capacity * 2;
+        OxlCell *nc = (OxlCell *)realloc(self->ws->cells, new_cap * sizeof(OxlCell));
+        if (!nc) { PyErr_NoMemory(); return -1; }
+        self->ws->cells = nc;
+        self->ws->cell_capacity = new_cap;
+    }
+    if (pos < self->ws->cell_count)
+        memmove(&self->ws->cells[pos + 1], &self->ws->cells[pos],
+                (self->ws->cell_count - pos) * sizeof(OxlCell));
+    self->ws->cells[pos] = newc;
+    self->ws->cell_count++;
+    /* Update row_count and col_count */
+    if (self->row + 1 > self->ws->row_count) self->ws->row_count = self->row + 1;
+    if ((uint32_t)self->col + 1 > self->ws->col_count) self->ws->col_count = (uint32_t)self->col + 1;
+    return 0;
+}
+
+/* ========== Phase 3: Cell getters/setters for font/fill/border/alignment ========== */
+
+/* Helper: build a PySideObject from an OxlBorderSide */
+static PyObject *make_side_from_c(const OxlBorderSide *side) {
+    PySideObject *obj = (PySideObject *)PySideType.tp_alloc(&PySideType, 0);
+    if (!obj) return NULL;
+    obj->style = (side && side->style) ? strdup(side->style) : NULL;
+    obj->color = (side && side->has_color) ? NULL : NULL;  /* color below */
+    if (side && side->has_color) {
+        char buf[9];
+        snprintf(buf, sizeof(buf), "%08X", side->color_rgb);
+        obj->color = strdup(buf);
+    }
+    return (PyObject *)obj;
+}
+
+static PyObject *cell_get_font(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    uint16_t xf_idx = c ? c->style_idx : 0;
+    const OxlXfRecord *xf = oxl_styles_get_xf(&self->wb->styles, xf_idx);
+    const OxlFontDef *font = oxl_styles_get_font(&self->wb->styles, xf ? xf->font_id : 0);
+
+    PyFontObject *obj = (PyFontObject *)PyFontType.tp_alloc(&PyFontType, 0);
+    if (!obj) return NULL;
+
+    if (font) {
+        obj->name = font->name ? strdup(font->name) : NULL;
+        obj->size = font->size > 0 ? (double)font->size : 11.0;
+        obj->bold = font->bold;
+        obj->italic = font->italic;
+        obj->underline = font->underline;
+        if (font->color_rgb != 0) {
+            char buf[9];
+            snprintf(buf, sizeof(buf), "%08X", font->color_rgb);
+            obj->color = strdup(buf);
+        } else {
+            obj->color = NULL;
+        }
+    } else {
+        obj->name = strdup("Calibri");
+        obj->size = 11.0;
+        obj->bold = 0;
+        obj->italic = 0;
+        obj->underline = 0;
+        obj->color = NULL;
+    }
+    return (PyObject *)obj;
+}
+
+static int cell_set_font(PyXlCellObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) { PyErr_SetString(PyExc_TypeError, "Cannot delete font"); return -1; }
+
+    uint16_t xf_idx;
+    const char *fmt_str;
+    uint32_t font_id, fill_id, border_id;
+    OxlAlignDef align;
+    get_cell_xf_context(self, &xf_idx, &fmt_str, &font_id, &fill_id, &border_id, &align);
+
+    oxl_styles_init_write_defaults(&self->wb->styles);
+
+    if (value == Py_None) {
+        font_id = 0;
+    } else if (PyObject_TypeCheck(value, &PyFontType)) {
+        PyFontObject *fo = (PyFontObject *)value;
+        OxlFontDef fd;
+        memset(&fd, 0, sizeof(fd));
+        fd.name = fo->name;
+        fd.size = (float)fo->size;
+        fd.bold = fo->bold;
+        fd.italic = fo->italic;
+        fd.underline = fo->underline;
+        fd.color_rgb = fo->color ? parse_color_str(fo->color) : 0;
+        font_id = oxl_styles_get_or_add_font(&self->wb->styles, &fd);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "font must be a Font object or None");
+        return -1;
+    }
+
+    uint16_t new_xf = oxl_styles_get_or_add_xf_full(&self->wb->styles, fmt_str,
+                                                      font_id, fill_id, border_id, &align);
+    return ensure_cell_with_style(self, new_xf);
+}
+
+static PyObject *cell_get_fill(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    uint16_t xf_idx = c ? c->style_idx : 0;
+    const OxlXfRecord *xf = oxl_styles_get_xf(&self->wb->styles, xf_idx);
+    const OxlFillDef *fill = oxl_styles_get_fill(&self->wb->styles, xf ? xf->fill_id : 0);
+
+    PyPatternFillObject *obj = (PyPatternFillObject *)PyPatternFillType.tp_alloc(&PyPatternFillType, 0);
+    if (!obj) return NULL;
+
+    if (fill) {
+        obj->fill_type = fill->pattern_type ? strdup(fill->pattern_type) : strdup("none");
+        obj->fg_color = (fill->fg_has_color && fill->fg_rgb != 0) ? NULL : NULL;
+        if (fill->fg_has_color && fill->fg_rgb != 0) {
+            char buf[9];
+            snprintf(buf, sizeof(buf), "%08X", fill->fg_rgb);
+            obj->fg_color = strdup(buf);
+        }
+        obj->bg_color = NULL;
+        if (fill->bg_has_color && fill->bg_rgb != 0) {
+            char buf[9];
+            snprintf(buf, sizeof(buf), "%08X", fill->bg_rgb);
+            obj->bg_color = strdup(buf);
+        }
+    } else {
+        obj->fill_type = strdup("none");
+        obj->fg_color = NULL;
+        obj->bg_color = NULL;
+    }
+    return (PyObject *)obj;
+}
+
+static int cell_set_fill(PyXlCellObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) { PyErr_SetString(PyExc_TypeError, "Cannot delete fill"); return -1; }
+
+    uint16_t xf_idx;
+    const char *fmt_str;
+    uint32_t font_id, fill_id, border_id;
+    OxlAlignDef align;
+    get_cell_xf_context(self, &xf_idx, &fmt_str, &font_id, &fill_id, &border_id, &align);
+
+    oxl_styles_init_write_defaults(&self->wb->styles);
+
+    if (value == Py_None) {
+        fill_id = 0;
+    } else if (PyObject_TypeCheck(value, &PyPatternFillType)) {
+        PyPatternFillObject *fo = (PyPatternFillObject *)value;
+        OxlFillDef fd;
+        memset(&fd, 0, sizeof(fd));
+        fd.pattern_type = fo->fill_type;
+        if (fo->fg_color) {
+            fd.fg_rgb = parse_color_str(fo->fg_color);
+            fd.fg_has_color = (fd.fg_rgb != 0) ? 1 : 0;
+        }
+        if (fo->bg_color) {
+            fd.bg_rgb = parse_color_str(fo->bg_color);
+            fd.bg_has_color = (fd.bg_rgb != 0) ? 1 : 0;
+        }
+        fill_id = oxl_styles_get_or_add_fill(&self->wb->styles, &fd);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "fill must be a PatternFill object or None");
+        return -1;
+    }
+
+    uint16_t new_xf = oxl_styles_get_or_add_xf_full(&self->wb->styles, fmt_str,
+                                                      font_id, fill_id, border_id, &align);
+    return ensure_cell_with_style(self, new_xf);
+}
+
+static PyObject *cell_get_border(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    uint16_t xf_idx = c ? c->style_idx : 0;
+    const OxlXfRecord *xf = oxl_styles_get_xf(&self->wb->styles, xf_idx);
+    const OxlBorderDef *border = oxl_styles_get_border(&self->wb->styles, xf ? xf->border_id : 0);
+
+    PyBorderObject *obj = (PyBorderObject *)PyBorderType.tp_alloc(&PyBorderType, 0);
+    if (!obj) return NULL;
+    /* Initialize all to None */
+    Py_INCREF(Py_None); obj->left   = Py_None;
+    Py_INCREF(Py_None); obj->right  = Py_None;
+    Py_INCREF(Py_None); obj->top    = Py_None;
+    Py_INCREF(Py_None); obj->bottom = Py_None;
+
+    if (border) {
+        if (border->left.style) {
+            PyObject *s = make_side_from_c(&border->left);
+            if (!s) { Py_DECREF(obj); return NULL; }
+            Py_DECREF(obj->left); obj->left = s;
+        }
+        if (border->right.style) {
+            PyObject *s = make_side_from_c(&border->right);
+            if (!s) { Py_DECREF(obj); return NULL; }
+            Py_DECREF(obj->right); obj->right = s;
+        }
+        if (border->top.style) {
+            PyObject *s = make_side_from_c(&border->top);
+            if (!s) { Py_DECREF(obj); return NULL; }
+            Py_DECREF(obj->top); obj->top = s;
+        }
+        if (border->bottom.style) {
+            PyObject *s = make_side_from_c(&border->bottom);
+            if (!s) { Py_DECREF(obj); return NULL; }
+            Py_DECREF(obj->bottom); obj->bottom = s;
+        }
+    }
+    return (PyObject *)obj;
+}
+
+static int cell_set_border(PyXlCellObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) { PyErr_SetString(PyExc_TypeError, "Cannot delete border"); return -1; }
+
+    uint16_t xf_idx;
+    const char *fmt_str;
+    uint32_t font_id, fill_id, border_id;
+    OxlAlignDef align;
+    get_cell_xf_context(self, &xf_idx, &fmt_str, &font_id, &fill_id, &border_id, &align);
+
+    oxl_styles_init_write_defaults(&self->wb->styles);
+
+    if (value == Py_None) {
+        border_id = 0;
+    } else if (PyObject_TypeCheck(value, &PyBorderType)) {
+        PyBorderObject *bo = (PyBorderObject *)value;
+        OxlBorderDef bd;
+        memset(&bd, 0, sizeof(bd));
+
+        if (bo->left != Py_None) {
+            PySideObject *s = (PySideObject *)bo->left;
+            bd.left.style = s->style;
+            if (s->color) { bd.left.color_rgb = parse_color_str(s->color); bd.left.has_color = 1; }
+        }
+        if (bo->right != Py_None) {
+            PySideObject *s = (PySideObject *)bo->right;
+            bd.right.style = s->style;
+            if (s->color) { bd.right.color_rgb = parse_color_str(s->color); bd.right.has_color = 1; }
+        }
+        if (bo->top != Py_None) {
+            PySideObject *s = (PySideObject *)bo->top;
+            bd.top.style = s->style;
+            if (s->color) { bd.top.color_rgb = parse_color_str(s->color); bd.top.has_color = 1; }
+        }
+        if (bo->bottom != Py_None) {
+            PySideObject *s = (PySideObject *)bo->bottom;
+            bd.bottom.style = s->style;
+            if (s->color) { bd.bottom.color_rgb = parse_color_str(s->color); bd.bottom.has_color = 1; }
+        }
+        border_id = oxl_styles_get_or_add_border(&self->wb->styles, &bd);
+    } else {
+        PyErr_SetString(PyExc_TypeError, "border must be a Border object or None");
+        return -1;
+    }
+
+    uint16_t new_xf = oxl_styles_get_or_add_xf_full(&self->wb->styles, fmt_str,
+                                                      font_id, fill_id, border_id, &align);
+    return ensure_cell_with_style(self, new_xf);
+}
+
+static PyObject *cell_get_alignment(PyXlCellObject *self, void *Py_UNUSED(x)) {
+    OxlCell *c = ws_find_cell(self->ws, self->row, self->col);
+    uint16_t xf_idx = c ? c->style_idx : 0;
+    const OxlXfRecord *xf = oxl_styles_get_xf(&self->wb->styles, xf_idx);
+
+    PyAlignmentObject *obj = (PyAlignmentObject *)PyAlignmentType.tp_alloc(&PyAlignmentType, 0);
+    if (!obj) return NULL;
+    obj->horizontal = NULL;
+    obj->vertical = NULL;
+    obj->indent = 0;
+    obj->text_rotation = 0;
+    obj->wrap_text = 0;
+    obj->shrink_to_fit = 0;
+
+    if (xf && xf->apply_alignment) {
+        const OxlAlignDef *a = &xf->align;
+        obj->horizontal    = a->horizontal   ? strdup(a->horizontal)  : NULL;
+        obj->vertical      = a->vertical     ? strdup(a->vertical)    : NULL;
+        obj->indent        = a->indent;
+        obj->text_rotation = a->text_rotation;
+        obj->wrap_text     = a->wrap_text;
+        obj->shrink_to_fit = a->shrink_to_fit;
+    }
+    return (PyObject *)obj;
+}
+
+static int cell_set_alignment(PyXlCellObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) { PyErr_SetString(PyExc_TypeError, "Cannot delete alignment"); return -1; }
+
+    uint16_t xf_idx;
+    const char *fmt_str;
+    uint32_t font_id, fill_id, border_id;
+    OxlAlignDef old_align;
+    get_cell_xf_context(self, &xf_idx, &fmt_str, &font_id, &fill_id, &border_id, &old_align);
+    (void)old_align;
+
+    oxl_styles_init_write_defaults(&self->wb->styles);
+
+    OxlAlignDef align_def;
+    memset(&align_def, 0, sizeof(align_def));
+
+    if (value == Py_None) {
+        /* align_def stays zero = no alignment */
+    } else if (PyObject_TypeCheck(value, &PyAlignmentType)) {
+        PyAlignmentObject *ao = (PyAlignmentObject *)value;
+        align_def.horizontal    = ao->horizontal;
+        align_def.vertical      = ao->vertical;
+        align_def.indent        = ao->indent;
+        align_def.text_rotation = ao->text_rotation;
+        align_def.wrap_text     = ao->wrap_text;
+        align_def.shrink_to_fit = ao->shrink_to_fit;
+    } else {
+        PyErr_SetString(PyExc_TypeError, "alignment must be an Alignment object or None");
+        return -1;
+    }
+
+    uint16_t new_xf = oxl_styles_get_or_add_xf_full(&self->wb->styles, fmt_str,
+                                                      font_id, fill_id, border_id, &align_def);
+    return ensure_cell_with_style(self, new_xf);
+}
+
 static PyObject *cell_repr(PyXlCellObject *self) {
     char col_str[8];
     col_idx_to_str((int)(self->col + 1), col_str);
@@ -520,6 +1420,10 @@ static PyGetSetDef cell_getset[] = {
     {"column_letter", (getter)cell_get_column_letter,   NULL,                            "Column letter (e.g. 'A')", NULL},
     {"data_type",     (getter)cell_get_data_type,       NULL,                            "Data type character", NULL},
     {"number_format", (getter)cell_get_number_format,   (setter)cell_set_number_format,  "Number format string", NULL},
+    {"font",          (getter)cell_get_font,            (setter)cell_set_font,           "Cell font", NULL},
+    {"fill",          (getter)cell_get_fill,            (setter)cell_set_fill,           "Cell fill", NULL},
+    {"border",        (getter)cell_get_border,          (setter)cell_set_border,         "Cell border", NULL},
+    {"alignment",     (getter)cell_get_alignment,       (setter)cell_set_alignment,      "Cell alignment", NULL},
     {NULL}
 };
 
@@ -1220,9 +2124,14 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     PyDateTime_IMPORT;
 
     if (PyType_Ready(&PyRowIteratorType) < 0) return NULL;
-    if (PyType_Ready(&PyXlCellType) < 0)        return NULL;
+    if (PyType_Ready(&PyXlCellType) < 0)      return NULL;
     if (PyType_Ready(&PyWorksheetType) < 0)   return NULL;
     if (PyType_Ready(&PyWorkbookType) < 0)    return NULL;
+    if (PyType_Ready(&PyFontType) < 0)        return NULL;
+    if (PyType_Ready(&PyPatternFillType) < 0) return NULL;
+    if (PyType_Ready(&PySideType) < 0)        return NULL;
+    if (PyType_Ready(&PyBorderType) < 0)      return NULL;
+    if (PyType_Ready(&PyAlignmentType) < 0)   return NULL;
 
     PyObject *mod = PyModule_Create(&moduledef);
     if (!mod) return NULL;
@@ -1239,6 +2148,31 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
         Py_DECREF(&PyXlCellType);
         Py_DECREF(mod);
         return NULL;
+    }
+
+    Py_INCREF(&PyFontType);
+    if (PyModule_AddObject(mod, "Font", (PyObject *)&PyFontType) < 0) {
+        Py_DECREF(&PyFontType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyPatternFillType);
+    if (PyModule_AddObject(mod, "PatternFill", (PyObject *)&PyPatternFillType) < 0) {
+        Py_DECREF(&PyPatternFillType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PySideType);
+    if (PyModule_AddObject(mod, "Side", (PyObject *)&PySideType) < 0) {
+        Py_DECREF(&PySideType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyBorderType);
+    if (PyModule_AddObject(mod, "Border", (PyObject *)&PyBorderType) < 0) {
+        Py_DECREF(&PyBorderType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyAlignmentType);
+    if (PyModule_AddObject(mod, "Alignment", (PyObject *)&PyAlignmentType) < 0) {
+        Py_DECREF(&PyAlignmentType); Py_DECREF(mod); return NULL;
     }
 
     return mod;

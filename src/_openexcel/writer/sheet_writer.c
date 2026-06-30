@@ -123,7 +123,7 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
             const OxlCell *c = &ws->cells[i];
             i++;
 
-            if (c->type == OXL_CELL_EMPTY && !c->formula) continue;
+            if (c->type == OXL_CELL_EMPTY && !c->formula && c->style_idx == 0) continue;
 
             /* Determine which style index to emit */
             uint16_t emit_style = c->style_idx;
