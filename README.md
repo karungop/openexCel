@@ -23,6 +23,24 @@ Benchmarked against openpyxl on mixed workloads (integers, floats, booleans, dat
 
 **~8× faster writes, ~5× faster reads** across all sizes tested.
 
+### Feature benchmarks
+
+Benchmarked on macOS arm64, Python 3.11. Each result is the median of 3 runs.
+
+| Benchmark | openexcel | openpyxl | Speedup |
+|---|---:|---:|---:|
+| Cell access (10k reads) | 1.73 ms | 1.80 ms | 1.0× |
+| Number format set (1k cells) | 225 µs | 431 µs | 1.9× |
+| Number format roundtrip (1k cells) | 2.01 ms | 17.75 ms | **8.8×** |
+| Formula write (1k cells) | 390 µs | 855 µs | 2.2× |
+| Formula roundtrip (1k cells) | 2.70 ms | 22.80 ms | **8.5×** |
+| Merged cells roundtrip (100 ranges) | 365 µs | 12.78 ms | **35×** |
+| Column/row dimensions roundtrip (50+50) | 337 µs | 4.65 ms | **13.8×** |
+| Named ranges roundtrip (20) | 298 µs | 3.30 ms | **11.1×** |
+| Freeze panes roundtrip | 583 µs | 5.60 ms | **9.6×** |
+
+The pattern: **in-memory cell manipulation is ~2× faster; any operation involving save+load is 8–35× faster**. The C XML serializer and SAX parser are where the largest gains appear.
+
 ## Installation
 
 ```bash
