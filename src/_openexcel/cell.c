@@ -106,4 +106,6 @@ void oxl_cell_free(OxlCell *c) {
     }
     free(c->formula);
     c->formula = NULL;
+    free(c->hyperlink);
+    c->hyperlink = NULL;
 }
