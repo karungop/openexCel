@@ -1,4 +1,5 @@
 #include "xml_sheet.h"
+#include "xml_sheet_rels.h"
 #include "../cell.h"
 #include "../styles.h"
 #include <expat.h>
@@ -21,6 +22,8 @@ typedef enum {
     /* Feature C */
     SS_SHEET_VIEWS,
     SS_SHEET_VIEW,
+    /* Phase 8: hyperlinks */
+    SS_HYPERLINKS,
 } SheetState;
 
 #define CBUF_STACK 512
@@ -52,6 +55,8 @@ typedef struct {
     size_t        rich_len;
     size_t        rich_cap;
     int           error;
+    /* Phase 8: hyperlink rels (NULL if no rels file for this sheet) */
+    const OxlHyperlinkRels *rels;
 } SheetCtx;
 
 /* Parse "B5" → row=4, col=1 */
@@ -233,6 +238,40 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
         else if (strcmp(name, "sheetData") == 0) {
             c->state = SS_SHEET_DATA;
         }
+        /* Phase 8: hyperlinks block */
+        else if (strcmp(name, "hyperlinks") == 0) {
+            c->state = SS_HYPERLINKS;
+        }
+        break;
+
+    /* Phase 8: hyperlink elements */
+    case SS_HYPERLINKS:
+        if (strcmp(name, "hyperlink") == 0) {
+            const char *ref = attr(attrs, "ref");
+            /* r:id attribute — expat passes namespace prefix literally */
+            const char *rid = attr(attrs, "r:id");
+            if (!rid) rid = attr(attrs, "id");  /* fallback */
+            if (ref && rid && c->rels) {
+                const char *url = oxl_hyperlink_rels_lookup(c->rels, rid);
+                if (url) {
+                    uint32_t row; uint16_t col;
+                    parse_cell_ref(ref, &row, &col);
+                    /* Binary search for existing cell */
+                    uint64_t key = ((uint64_t)row << 16) | col;
+                    uint32_t lo = 0, hi = c->ws->cell_count;
+                    while (lo < hi) {
+                        uint32_t mid = lo + (hi - lo) / 2;
+                        uint64_t mk = ((uint64_t)c->ws->cells[mid].row << 16) | c->ws->cells[mid].col;
+                        if (mk == key) {
+                            free(c->ws->cells[mid].hyperlink);
+                            c->ws->cells[mid].hyperlink = strdup(url);
+                            break;
+                        }
+                        if (mk < key) lo = mid + 1; else hi = mid;
+                    }
+                }
+            }
+        }
         break;
 
     /* Feature C: sheetViews / sheetView / pane */
@@ -370,6 +409,10 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
     } else if (strcmp(name, "sheetViews") == 0 && c->state == SS_SHEET_VIEWS) {
         c->state = SS_NONE;
     }
+    /* Phase 8: hyperlinks block end */
+    else if (strcmp(name, "hyperlinks") == 0 && c->state == SS_HYPERLINKS) {
+        c->state = SS_NONE;
+    }
 }
 
 static void XMLCALL sheet_char(void *ud, const char *s, int n) {
@@ -382,11 +425,13 @@ static void XMLCALL sheet_char(void *ud, const char *s, int n) {
 }
 
 int oxl_parse_sheet(const char *buf, size_t len,
-                    OxlWorksheet *ws, OxlWorkbook *wb) {
+                    OxlWorksheet *ws, OxlWorkbook *wb,
+                    const OxlHyperlinkRels *rels) {
     SheetCtx c;
     memset(&c, 0, sizeof(c));
     c.ws   = ws;
     c.wb   = wb;
+    c.rels = rels;
     cbuf_reset(&c);
     formula_buf_reset(&c);
 

@@ -17,6 +17,7 @@ set(OPENEXCEL_SOURCES
     src/_openexcel/reader/xml_sst.c
     src/_openexcel/reader/xml_styles.c
     src/_openexcel/reader/xml_sheet.c
+    src/_openexcel/reader/xml_sheet_rels.c
     src/_openexcel/writer/writer.c
     src/_openexcel/writer/zip_writer.c
     src/_openexcel/writer/xml_gen.c
