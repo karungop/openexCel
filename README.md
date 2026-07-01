@@ -29,15 +29,19 @@ Benchmarked on macOS arm64, Python 3.11. Each result is the median of 3 runs.
 
 | Benchmark | openexcel | openpyxl | Speedup |
 |---|---:|---:|---:|
-| Cell access (10k reads) | 1.73 ms | 1.80 ms | 1.0× |
-| Number format set (1k cells) | 225 µs | 431 µs | 1.9× |
-| Number format roundtrip (1k cells) | 2.01 ms | 17.75 ms | **8.8×** |
-| Formula write (1k cells) | 390 µs | 855 µs | 2.2× |
-| Formula roundtrip (1k cells) | 2.70 ms | 22.80 ms | **8.5×** |
-| Merged cells roundtrip (100 ranges) | 365 µs | 12.78 ms | **35×** |
-| Column/row dimensions roundtrip (50+50) | 337 µs | 4.65 ms | **13.8×** |
-| Named ranges roundtrip (20) | 298 µs | 3.30 ms | **11.1×** |
-| Freeze panes roundtrip | 583 µs | 5.60 ms | **9.6×** |
+| Cell access (10k reads) | 1.69 ms | 1.82 ms | 1.1× |
+| Number format set (1k cells) | 220 µs | 429 µs | 2.0× |
+| Number format roundtrip (1k cells) | 2.04 ms | 18.04 ms | **8.8×** |
+| Formula write (1k cells) | 390 µs | 942 µs | 2.4× |
+| Formula roundtrip (1k cells) | 2.88 ms | 23.09 ms | **8.0×** |
+| Merged cells roundtrip (100 ranges) | 366 µs | 12.90 ms | **35.2×** |
+| Column/row dimensions roundtrip (50+50) | 329 µs | 4.54 ms | **13.8×** |
+| Named ranges roundtrip (20) | 321 µs | 3.36 ms | **10.5×** |
+| Freeze panes roundtrip | 525 µs | 5.56 ms | **10.6×** |
+| Hyperlinks roundtrip (50 cells) | 662 µs | 5.26 ms | **7.9×** |
+| Data validation roundtrip (10 rules) | 390 µs | 3.44 ms | **8.8×** |
+| Page setup roundtrip | 355 µs | 3.11 ms | **8.8×** |
+| Sheet protection roundtrip | 347 µs | 3.42 ms | **9.9×** |
 
 The pattern: **in-memory cell manipulation is ~2× faster; any operation involving save+load is 8–35× faster**. The C XML serializer and SAX parser are where the largest gains appear.
 
@@ -242,6 +246,160 @@ cell.hyperlink = None
 
 Hyperlinks are stored in the standard OOXML location (`xl/worksheets/_rels/sheetN.xml.rels`). Both external URLs and internal sheet anchors (e.g. `"#Sheet2!A1"`) are supported. Hyperlinks compose with all other cell properties — a cell can have a hyperlink, a value, a font, and a number format simultaneously.
 
+### Data validation
+
+```python
+from openexcel import DataValidation
+
+# Drop-down list
+dv = DataValidation(
+    type="list",
+    formula1='"Yes,No,Maybe"',
+    sqref="A1:A100",
+    show_error_message=True,
+    error_title="Invalid input",
+    error_message="Please choose Yes, No, or Maybe.",
+)
+ws.add_data_validation(dv)
+
+# Whole number in range
+dv2 = DataValidation(
+    type="whole",
+    operator="between",
+    formula1="1",
+    formula2="10",
+    sqref="B1:B50",
+    allow_blank=True,
+)
+ws.add_data_validation(dv2)
+
+# Read back after save/load
+wb2 = openexcel.load_workbook("output.xlsx")
+validations = wb2[0].data_validations   # list of DataValidation objects
+print(validations[0].type)             # "list"
+print(validations[0].sqref)            # "A1:A100"
+```
+
+`DataValidation` constructor parameters:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `type` | `str` | `"list"`, `"whole"`, `"decimal"`, `"date"`, `"time"`, `"textLength"`, `"custom"` |
+| `operator` | `str` | `"between"`, `"notBetween"`, `"equal"`, `"notEqual"`, `"greaterThan"`, `"lessThan"`, `"greaterThanOrEqual"`, `"lessThanOrEqual"` |
+| `formula1` | `str` | First value/formula |
+| `formula2` | `str` | Second value/formula (for `between`/`notBetween`) |
+| `sqref` | `str` | Cell range (e.g. `"A1:A100"`) |
+| `allow_blank` | `bool` | Allow empty cells (default `False`) |
+| `show_drop_down` | `bool` | Hide the dropdown arrow for list validations (default `False`) |
+| `show_error_message` | `bool` | Show error alert (default `False`) |
+| `error_title` | `str` | Error dialog title |
+| `error_message` | `str` | Error dialog message |
+| `error_style` | `str` | `"stop"`, `"warning"`, or `"information"` |
+| `show_input_message` | `bool` | Show input prompt (default `False`) |
+| `prompt_title` | `str` | Input prompt title |
+| `prompt_message` | `str` | Input prompt message |
+
+### Page setup and print options
+
+```python
+from openexcel import PageSetup, PageMargins, PrintOptions
+
+# Page setup
+ws.page_setup = PageSetup(
+    orientation="landscape",  # "portrait" or "landscape"
+    paper_size=9,             # 9 = A4, 1 = Letter
+    scale=75,                 # zoom percentage (10–400)
+)
+
+# Fit-to-page mode
+ws.page_setup = PageSetup(
+    fit_to_page=True,
+    fit_to_width=1,
+    fit_to_height=0,          # 0 = unlimited pages tall
+)
+
+# Page margins (in inches)
+ws.page_margins = PageMargins(
+    left=0.5, right=0.5,
+    top=1.0,  bottom=1.0,
+    header=0.5, footer=0.5,
+)
+
+# Print options
+ws.print_options = PrintOptions(
+    grid_lines=True,          # print gridlines
+    headings=True,            # print row/column headings
+    horizontal_centered=True, # center content horizontally on page
+    vertical_centered=True,   # center content vertically on page
+)
+
+# Read back
+ws2 = openexcel.load_workbook("output.xlsx")[0]
+print(ws2.page_setup.orientation)       # "landscape"
+print(ws2.page_margins.left)            # 0.5
+print(ws2.print_options.grid_lines)     # True
+```
+
+Common paper size codes: `1` = Letter (8.5×11"), `9` = A4, `5` = Legal, `13` = B5.
+
+### Sheet protection
+
+```python
+from openexcel import SheetProtection
+
+# Lock the sheet (prevent edits)
+ws.protection = SheetProtection(
+    sheet=True,           # enable protection
+    format_cells=False,   # deny format-cells (True = allow)
+    insert_rows=False,    # deny inserting rows
+    delete_rows=False,    # deny deleting rows
+)
+
+# Password-protect (password hash must be pre-computed)
+ws.protection = SheetProtection(
+    sheet=True,
+    password_hash="ABCD",         # legacy XOR hash
+)
+
+# Read back
+ws2 = openexcel.load_workbook("output.xlsx")[0]
+prot = ws2.protection
+if prot is not None:
+    print(prot.sheet)         # True
+    print(prot.format_cells)  # False
+
+# Remove protection
+ws.protection = None
+```
+
+`SheetProtection` constructor parameters — all optional, default `False`/`None`:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `sheet` | `bool` | Enable sheet protection |
+| `objects` | `bool` | Protect objects |
+| `scenarios` | `bool` | Protect scenarios |
+| `format_cells` | `bool` | **Allow** formatting cells (inverted: `True` = allowed) |
+| `format_columns` | `bool` | Allow formatting columns |
+| `format_rows` | `bool` | Allow formatting rows |
+| `insert_columns` | `bool` | Allow inserting columns |
+| `insert_rows` | `bool` | Allow inserting rows |
+| `insert_hyperlinks` | `bool` | Allow inserting hyperlinks |
+| `delete_columns` | `bool` | Allow deleting columns |
+| `delete_rows` | `bool` | Allow deleting rows |
+| `select_locked` | `bool` | Allow selecting locked cells |
+| `sort` | `bool` | Allow sorting |
+| `auto_filter` | `bool` | Allow using auto-filter |
+| `pivot_tables` | `bool` | Allow using pivot tables |
+| `select_unlocked` | `bool` | Allow selecting unlocked cells |
+| `password_hash` | `str` | Legacy XOR password hash |
+| `algorithm_name` | `str` | Hash algorithm (e.g. `"SHA-512"`) |
+| `hash_value` | `str` | Base64-encoded hash (modern protection) |
+| `salt_value` | `str` | Base64-encoded salt |
+| `spin_count` | `int` | Spin count for hash iterations |
+
+> **Note on `format_cells` and similar flags**: In OOXML, `formatCells="1"` means the action is *denied*. openexcel inverts this for readability — `format_cells=True` means the action is *allowed*.
+
 ### Named ranges
 
 ```python
@@ -315,6 +473,12 @@ Create a new empty workbook.
 | `.show_gridlines` | Get/set gridline visibility |
 | `.tab_color` | Get/set tab color as RRGGBB hex string |
 | `.auto_filter_ref` | Get/set auto-filter range |
+| `.add_data_validation(dv)` | Add a `DataValidation` rule to the sheet |
+| `.data_validations` | List of `DataValidation` objects on this sheet |
+| `.page_setup` | Get/set `PageSetup` object (orientation, paper size, scale) |
+| `.page_margins` | Get/set `PageMargins` object (left, right, top, bottom, header, footer) |
+| `.print_options` | Get/set `PrintOptions` object (gridlines, headings, centering) |
+| `.protection` | Get/set `SheetProtection` object, or `None` to clear |
 
 ### `Cell`
 
@@ -348,9 +512,11 @@ Create a new empty workbook.
 | Column/row dimensions | Supported | Supported |
 | Font / fill / border / alignment | **Supported** (`Font`, `PatternFill`, `Border`, `Side`, `Alignment`) | Full style API |
 | Hyperlinks | **Supported** (`cell.hyperlink`) | Supported |
+| Data validation | **Supported** (`DataValidation`, `ws.add_data_validation`) | Supported |
+| Page setup / margins | **Supported** (`PageSetup`, `PageMargins`, `PrintOptions`) | Supported |
+| Sheet protection | **Supported** (`SheetProtection`, `ws.protection`) | Supported |
 | Conditional formatting | Not yet supported | Supported |
 | Charts / images | Not yet supported | Supported |
-| Data validation | Not yet supported | Supported |
 | Comments | Not yet supported | Supported |
 
 ## License

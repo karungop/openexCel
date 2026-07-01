@@ -11,6 +11,10 @@ Benchmarks features beyond bulk row read/write:
   7. Column/row dimensions (set + save + reload)
   8. Named ranges (add + save + reload)
   9. Freeze panes (set + save + reload)
+ 10. Hyperlinks (50 cells, roundtrip)
+ 11. Data validation (10 rules, roundtrip)
+ 12. Page setup (roundtrip)
+ 13. Sheet protection (roundtrip)
 """
 
 import os
@@ -21,6 +25,8 @@ import time
 import openexcel
 import openpyxl
 import openpyxl.workbook.defined_name as openpyxl_dn
+from openpyxl.worksheet.datavalidation import DataValidation as OpenpyxlDV
+from openpyxl.worksheet.protection import SheetProtection as OpenpyxlSP
 
 ITERATIONS = 3
 
@@ -417,6 +423,139 @@ def bench_freeze_panes_openpyxl():
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+# ── 10. Hyperlinks (50 cells, roundtrip) ─────────────────────────────────────
+
+def bench_hyperlinks_openexcel():
+    def run():
+        wb = openexcel.Workbook()
+        ws = wb.create_sheet("Sheet1")
+        for i in range(1, 51):
+            ws.cell(row=i, column=1).value = f"Link {i}"
+            ws.cell(row=i, column=1).hyperlink = f"https://example.com/{i}"
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openexcel.load_workbook(tmp)
+        _ = [ws2.cell(row=i, column=1).hyperlink for i in range(1, 51)
+             for ws2 in [wb2[0]]]
+        os.unlink(tmp)
+    return median_ms(run)
+
+def bench_hyperlinks_openpyxl():
+    def run():
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for i in range(1, 51):
+            ws.cell(row=i, column=1).value = f"Link {i}"
+            ws.cell(row=i, column=1).hyperlink = f"https://example.com/{i}"
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openpyxl.load_workbook(tmp)
+        ws2 = wb2.active
+        _ = [ws2.cell(row=i, column=1).hyperlink for i in range(1, 51)]
+        os.unlink(tmp)
+    return median_ms(run)
+
+
+# ── 11. Data validation (10 rules, roundtrip) ────────────────────────────────
+
+def bench_data_validation_openexcel():
+    def run():
+        wb = openexcel.Workbook()
+        ws = wb.create_sheet("Sheet1")
+        for i in range(10):
+            dv = openexcel.DataValidation(
+                type="list", formula1='"Yes,No,Maybe"',
+                sqref=f"A{i*10+1}:A{i*10+10}"
+            )
+            ws.add_data_validation(dv)
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openexcel.load_workbook(tmp)
+        _ = wb2[0].data_validations
+        os.unlink(tmp)
+    return median_ms(run)
+
+def bench_data_validation_openpyxl():
+    def run():
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        for i in range(10):
+            dv = OpenpyxlDV(type="list", formula1='"Yes,No,Maybe"', showDropDown=False)
+            dv.sqref = f"A{i*10+1}:A{i*10+10}"
+            ws.add_data_validation(dv)
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openpyxl.load_workbook(tmp)
+        _ = list(wb2.active.data_validations.dataValidation)
+        os.unlink(tmp)
+    return median_ms(run)
+
+
+# ── 12. Page setup (roundtrip) ───────────────────────────────────────────────
+
+def bench_page_setup_openexcel():
+    def run():
+        wb = openexcel.Workbook()
+        ws = wb.create_sheet("Sheet1")
+        ws.page_setup = openexcel.PageSetup(orientation="landscape", paper_size=9, scale=75)
+        ws.page_margins = openexcel.PageMargins(left=0.5, right=0.5, top=1.0, bottom=1.0,
+                                                 header=0.5, footer=0.5)
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openexcel.load_workbook(tmp)
+        _ = wb2[0].page_setup.orientation
+        _ = wb2[0].page_margins.left
+        os.unlink(tmp)
+    return median_ms(run)
+
+def bench_page_setup_openpyxl():
+    def run():
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.paperSize = 9
+        ws.page_setup.scale = 75
+        ws.page_margins.left = 0.5
+        ws.page_margins.right = 0.5
+        ws.page_margins.top = 1.0
+        ws.page_margins.bottom = 1.0
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openpyxl.load_workbook(tmp)
+        _ = wb2.active.page_setup.orientation
+        _ = wb2.active.page_margins.left
+        os.unlink(tmp)
+    return median_ms(run)
+
+
+# ── 13. Sheet protection (roundtrip) ─────────────────────────────────────────
+
+def bench_sheet_protection_openexcel():
+    def run():
+        wb = openexcel.Workbook()
+        ws = wb.create_sheet("Sheet1")
+        ws.protection = openexcel.SheetProtection(sheet=True, format_cells=True)
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openexcel.load_workbook(tmp)
+        _ = wb2[0].protection.sheet
+        os.unlink(tmp)
+    return median_ms(run)
+
+def bench_sheet_protection_openpyxl():
+    def run():
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.protection.sheet = True
+        ws.protection.formatCells = False
+        tmp = tempfile.mktemp(suffix=".xlsx")
+        wb.save(tmp)
+        wb2 = openpyxl.load_workbook(tmp)
+        _ = wb2.active.protection.sheet
+        os.unlink(tmp)
+    return median_ms(run)
+
+
 BENCHMARKS = [
     (
         "Cell access (10k reads)",
@@ -462,6 +601,26 @@ BENCHMARKS = [
         "Freeze panes (roundtrip)",
         bench_freeze_panes_openexcel,
         bench_freeze_panes_openpyxl,
+    ),
+    (
+        "Hyperlinks (50 cells, roundtrip)",
+        bench_hyperlinks_openexcel,
+        bench_hyperlinks_openpyxl,
+    ),
+    (
+        "Data validation (10 rules, roundtrip)",
+        bench_data_validation_openexcel,
+        bench_data_validation_openpyxl,
+    ),
+    (
+        "Page setup (roundtrip)",
+        bench_page_setup_openexcel,
+        bench_page_setup_openpyxl,
+    ),
+    (
+        "Sheet protection (roundtrip)",
+        bench_sheet_protection_openexcel,
+        bench_sheet_protection_openpyxl,
     ),
 ]
 
