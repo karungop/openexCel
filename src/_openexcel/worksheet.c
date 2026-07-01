@@ -60,6 +60,17 @@ void oxl_worksheet_free(OxlWorksheet *ws) {
     free(ws->protection.algorithm_name);
     free(ws->protection.hash_value);
     free(ws->protection.salt_value);
+    /* Phase 16: conditional formatting */
+    if (ws->cond_fmts) {
+        for (uint32_t i = 0; i < ws->cf_count; i++) {
+            OxlCf *cf = &ws->cond_fmts[i];
+            free(cf->sqref);
+            for (uint32_t j = 0; j < cf->rule_count; j++)
+                oxl_cf_rule_free_fields(&cf->rules[j]);
+            free(cf->rules);
+        }
+        free(ws->cond_fmts);
+    }
     free(ws);
 }
 
@@ -184,5 +195,121 @@ int oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation 
     dst->show_drop_down     = dv->show_drop_down;
     dst->show_error_message = dv->show_error_message;
     dst->show_input_message = dv->show_input_message;
+    return 0;
+}
+
+/* ── Phase 16: Conditional Formatting ───────────────────────────────────── */
+
+void oxl_cfvo_free_fields(OxlCfvo *v) {
+    free(v->type);
+    free(v->val);
+}
+
+void oxl_cf_rule_free_fields(OxlCfRule *rule) {
+    free(rule->type);
+    free(rule->operator_);
+    free(rule->formula);
+    free(rule->formula2);
+    free(rule->text);
+    /* Note: font/fill/border are NOT owned by OxlCfRule (they point to rule_obj Python data).
+       After dxf_id is assigned, the pointers are only used during the pre-pass in writer.c.
+       For heap-allocated copies (from Python add_conditional_formatting), we need to free them.
+       The convention: if dxf_id >= 0, the font/fill/border were used for DXF creation.
+       We free them here since oxl_worksheet_add_cf_rule makes copies. */
+    free(rule->font);
+    free(rule->fill);
+    free(rule->border);
+    for (uint32_t i = 0; i < rule->cfvo_count; i++)
+        oxl_cfvo_free_fields(&rule->cfvos[i]);
+}
+
+int oxl_worksheet_add_cf_rule(OxlWorksheet *ws, const char *sqref, const OxlCfRule *rule) {
+    /* Find or create an OxlCf block for this sqref */
+    OxlCf *cf = NULL;
+    for (uint32_t i = 0; i < ws->cf_count; i++) {
+        if (ws->cond_fmts[i].sqref && sqref &&
+            strcmp(ws->cond_fmts[i].sqref, sqref) == 0) {
+            cf = &ws->cond_fmts[i];
+            break;
+        }
+    }
+    if (!cf) {
+        /* Create new OxlCf block */
+        if (ws->cf_count >= ws->cf_cap) {
+            uint32_t cap = ws->cf_cap ? ws->cf_cap * 2 : 8;
+            OxlCf *p = realloc(ws->cond_fmts, cap * sizeof(OxlCf));
+            if (!p) return -1;
+            ws->cond_fmts = p;
+            ws->cf_cap = cap;
+        }
+        cf = &ws->cond_fmts[ws->cf_count++];
+        memset(cf, 0, sizeof(*cf));
+        cf->sqref = sqref ? strdup(sqref) : NULL;
+    }
+    /* Append rule to this OxlCf block */
+    if (cf->rule_count >= cf->rule_cap) {
+        uint32_t cap = cf->rule_cap ? cf->rule_cap * 2 : 4;
+        OxlCfRule *p = realloc(cf->rules, cap * sizeof(OxlCfRule));
+        if (!p) return -1;
+        cf->rules = p;
+        cf->rule_cap = cap;
+    }
+    OxlCfRule *dst = &cf->rules[cf->rule_count++];
+    memset(dst, 0, sizeof(*dst));
+    dst->type      = rule->type      ? strdup(rule->type)      : NULL;
+    dst->operator_ = rule->operator_ ? strdup(rule->operator_) : NULL;
+    dst->formula   = rule->formula   ? strdup(rule->formula)   : NULL;
+    dst->formula2  = rule->formula2  ? strdup(rule->formula2)  : NULL;
+    dst->text      = rule->text      ? strdup(rule->text)      : NULL;
+    dst->priority  = rule->priority;
+    dst->stop_if_true = rule->stop_if_true;
+    dst->dxf_id    = rule->dxf_id;
+    dst->top10_top = rule->top10_top;
+    dst->top10_percent = rule->top10_percent;
+    dst->top10_rank = rule->top10_rank;
+    dst->above_avg  = rule->above_avg;
+    dst->equal_avg  = rule->equal_avg;
+    dst->cfvo_count = rule->cfvo_count;
+    dst->color_count = rule->color_count;
+    dst->data_bar_show_value = rule->data_bar_show_value;
+    /* Copy cfvos */
+    for (uint32_t i = 0; i < rule->cfvo_count && i < 3; i++) {
+        dst->cfvos[i].type = rule->cfvos[i].type ? strdup(rule->cfvos[i].type) : NULL;
+        dst->cfvos[i].val  = rule->cfvos[i].val  ? strdup(rule->cfvos[i].val)  : NULL;
+        dst->cfvos[i].rgb  = rule->cfvos[i].rgb;
+        dst->cfvos[i].has_rgb = rule->cfvos[i].has_rgb;
+    }
+    /* Copy colors */
+    for (uint32_t i = 0; i < rule->color_count && i < 3; i++)
+        dst->colors[i] = rule->colors[i];
+    /* Deep-copy font/fill/border if present */
+    dst->font = NULL;
+    dst->fill = NULL;
+    dst->border = NULL;
+    if (rule->font) {
+        dst->font = calloc(1, sizeof(OxlFontDef));
+        if (dst->font) {
+            *dst->font = *rule->font;
+            dst->font->name = rule->font->name ? strdup(rule->font->name) : NULL;
+        }
+    }
+    if (rule->fill) {
+        dst->fill = calloc(1, sizeof(OxlFillDef));
+        if (dst->fill) {
+            *dst->fill = *rule->fill;
+            dst->fill->pattern_type = rule->fill->pattern_type ? strdup(rule->fill->pattern_type) : NULL;
+        }
+    }
+    if (rule->border) {
+        dst->border = calloc(1, sizeof(OxlBorderDef));
+        if (dst->border) {
+            *dst->border = *rule->border;
+            dst->border->left.style     = rule->border->left.style     ? strdup(rule->border->left.style)     : NULL;
+            dst->border->right.style    = rule->border->right.style    ? strdup(rule->border->right.style)    : NULL;
+            dst->border->top.style      = rule->border->top.style      ? strdup(rule->border->top.style)      : NULL;
+            dst->border->bottom.style   = rule->border->bottom.style   ? strdup(rule->border->bottom.style)   : NULL;
+            dst->border->diagonal.style = rule->border->diagonal.style ? strdup(rule->border->diagonal.style) : NULL;
+        }
+    }
     return 0;
 }

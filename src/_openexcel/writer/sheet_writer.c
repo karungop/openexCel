@@ -1,5 +1,6 @@
 #include "sheet_writer.h"
 #include "../cell.h"
+#include "../worksheet.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
@@ -435,6 +436,129 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
             oxl_xmlbuf_raw(b, "\"", 1);
         }
         oxl_xmlbuf_cstr(b, "/>");
+    }
+
+    /* Phase 16: <conditionalFormatting> */
+    for (uint32_t ci = 0; ci < ws->cf_count; ci++) {
+        const OxlCf *cf = &ws->cond_fmts[ci];
+        if (!cf->rule_count) continue;
+        oxl_xmlbuf_cstr(b, "<conditionalFormatting sqref=\"");
+        oxl_xmlbuf_attr_val(b, cf->sqref ? cf->sqref : "");
+        oxl_xmlbuf_cstr(b, "\">");
+        for (uint32_t ri = 0; ri < cf->rule_count; ri++) {
+            const OxlCfRule *rule = &cf->rules[ri];
+            int32_t pri = rule->priority > 0 ? rule->priority : (int32_t)(ri + 1);
+            oxl_xmlbuf_cstr(b, "<cfRule type=\"");
+            oxl_xmlbuf_attr_val(b, rule->type ? rule->type : "cellIs");
+            oxl_xmlbuf_cstr(b, "\" priority=\"");
+            oxl_xmlbuf_uint(b, (uint32_t)pri);
+            oxl_xmlbuf_raw(b, "\"", 1);
+            if (rule->dxf_id >= 0) {
+                oxl_xmlbuf_cstr(b, " dxfId=\"");
+                oxl_xmlbuf_uint(b, (uint32_t)rule->dxf_id);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (rule->stop_if_true)
+                oxl_xmlbuf_cstr(b, " stopIfTrue=\"1\"");
+            if (rule->operator_) {
+                oxl_xmlbuf_cstr(b, " operator=\"");
+                oxl_xmlbuf_attr_val(b, rule->operator_);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            if (rule->text) {
+                oxl_xmlbuf_cstr(b, " text=\"");
+                oxl_xmlbuf_attr_val(b, rule->text);
+                oxl_xmlbuf_raw(b, "\"", 1);
+            }
+            /* top10 fields */
+            const char *type_s = rule->type ? rule->type : "";
+            if (strcmp(type_s, "top10") == 0) {
+                oxl_xmlbuf_cstr(b, " rank=\"");
+                oxl_xmlbuf_uint(b, rule->top10_rank > 0 ? rule->top10_rank : 10);
+                oxl_xmlbuf_raw(b, "\"", 1);
+                if (!rule->top10_top)
+                    oxl_xmlbuf_cstr(b, " top=\"0\"");
+                if (rule->top10_percent)
+                    oxl_xmlbuf_cstr(b, " percent=\"1\"");
+            }
+            /* aboveAverage */
+            if (strcmp(type_s, "aboveAverage") == 0) {
+                if (!rule->above_avg)
+                    oxl_xmlbuf_cstr(b, " aboveAverage=\"0\"");
+                if (rule->equal_avg)
+                    oxl_xmlbuf_cstr(b, " equalAverage=\"1\"");
+            }
+            oxl_xmlbuf_raw(b, ">", 1);
+
+            /* <colorScale> */
+            if (strcmp(type_s, "colorScale") == 0 && rule->cfvo_count >= 2) {
+                oxl_xmlbuf_cstr(b, "<colorScale>");
+                for (uint32_t k = 0; k < rule->cfvo_count; k++) {
+                    oxl_xmlbuf_cstr(b, "<cfvo type=\"");
+                    oxl_xmlbuf_attr_val(b, rule->cfvos[k].type ? rule->cfvos[k].type : "min");
+                    oxl_xmlbuf_raw(b, "\"", 1);
+                    if (rule->cfvos[k].val) {
+                        oxl_xmlbuf_cstr(b, " val=\"");
+                        oxl_xmlbuf_attr_val(b, rule->cfvos[k].val);
+                        oxl_xmlbuf_raw(b, "\"", 1);
+                    }
+                    oxl_xmlbuf_cstr(b, "/>");
+                }
+                for (uint32_t k = 0; k < rule->color_count; k++) {
+                    uint32_t argb = rule->colors[k];
+                    if ((argb >> 24) == 0) argb |= 0xFF000000u;
+                    char hex[9];
+                    snprintf(hex, sizeof(hex), "%08X", argb);
+                    oxl_xmlbuf_cstr(b, "<color rgb=\"");
+                    oxl_xmlbuf_cstr(b, hex);
+                    oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                oxl_xmlbuf_cstr(b, "</colorScale>");
+            }
+            /* <dataBar> */
+            else if (strcmp(type_s, "dataBar") == 0 && rule->cfvo_count >= 2) {
+                if (!rule->data_bar_show_value)
+                    oxl_xmlbuf_cstr(b, "<dataBar showValue=\"0\">");
+                else
+                    oxl_xmlbuf_cstr(b, "<dataBar>");
+                for (uint32_t k = 0; k < rule->cfvo_count; k++) {
+                    oxl_xmlbuf_cstr(b, "<cfvo type=\"");
+                    oxl_xmlbuf_attr_val(b, rule->cfvos[k].type ? rule->cfvos[k].type : "min");
+                    oxl_xmlbuf_raw(b, "\"", 1);
+                    if (rule->cfvos[k].val) {
+                        oxl_xmlbuf_cstr(b, " val=\"");
+                        oxl_xmlbuf_attr_val(b, rule->cfvos[k].val);
+                        oxl_xmlbuf_raw(b, "\"", 1);
+                    }
+                    oxl_xmlbuf_cstr(b, "/>");
+                }
+                if (rule->color_count > 0) {
+                    uint32_t argb = rule->colors[0];
+                    if ((argb >> 24) == 0) argb |= 0xFF000000u;
+                    char hex[9];
+                    snprintf(hex, sizeof(hex), "%08X", argb);
+                    oxl_xmlbuf_cstr(b, "<color rgb=\"");
+                    oxl_xmlbuf_cstr(b, hex);
+                    oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                oxl_xmlbuf_cstr(b, "</dataBar>");
+            }
+            /* formula(s) for cellIs, expression, containsText, etc. */
+            else {
+                if (rule->formula) {
+                    oxl_xmlbuf_cstr(b, "<formula>");
+                    oxl_xmlbuf_text(b, rule->formula);
+                    oxl_xmlbuf_cstr(b, "</formula>");
+                }
+                if (rule->formula2) {
+                    oxl_xmlbuf_cstr(b, "<formula>");
+                    oxl_xmlbuf_text(b, rule->formula2);
+                    oxl_xmlbuf_cstr(b, "</formula>");
+                }
+            }
+            oxl_xmlbuf_cstr(b, "</cfRule>");
+        }
+        oxl_xmlbuf_cstr(b, "</conditionalFormatting>");
     }
 
     oxl_xmlbuf_cstr(b, "</worksheet>");

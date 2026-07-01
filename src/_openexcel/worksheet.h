@@ -1,5 +1,6 @@
 #pragma once
 #include "cell.h"
+#include "styles.h"
 #include <stdint.h>
 
 /* ── Feature A: Column & Row Dimensions ─────────────────────────────────── */
@@ -105,6 +106,48 @@ typedef struct {
     uint8_t  has_options;          /* 1 = at least one flag set */
 } OxlPrintOptions;
 
+/* Phase 16: Conditional Formatting */
+
+typedef struct {
+    char    *type;    /* "min","max","num","percent","percentile","formula" */
+    char    *val;
+    uint32_t rgb;
+    uint8_t  has_rgb;
+} OxlCfvo;
+
+typedef struct {
+    char    *type;       /* "cellIs","expression","colorScale","dataBar","top10",
+                            "aboveAverage","containsText","notContainsText",
+                            "beginsWith","endsWith","duplicateValues","uniqueValues" */
+    char    *operator_;
+    char    *formula;
+    char    *formula2;
+    char    *text;
+    int32_t  priority;
+    uint8_t  stop_if_true;
+    OxlFontDef  *font;   /* NULL = no font override */
+    OxlFillDef  *fill;   /* NULL = no fill override */
+    OxlBorderDef *border; /* NULL = no border override */
+    int32_t  dxf_id;     /* -1 = unset */
+    uint8_t  top10_top;
+    uint8_t  top10_percent;
+    uint32_t top10_rank;
+    uint8_t  above_avg;
+    uint8_t  equal_avg;
+    OxlCfvo  cfvos[3];
+    uint32_t cfvo_count;
+    uint32_t colors[3];  /* ARGB */
+    uint32_t color_count;
+    uint8_t  data_bar_show_value;
+} OxlCfRule;
+
+typedef struct {
+    char      *sqref;
+    OxlCfRule *rules;
+    uint32_t   rule_count;
+    uint32_t   rule_cap;
+} OxlCf;
+
 /* ── Worksheet ───────────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -152,6 +195,11 @@ typedef struct {
 
     /* Phase 15: Sheet Protection */
     OxlSheetProtection protection;
+
+    /* Phase 16: Conditional Formatting */
+    OxlCf    *cond_fmts;
+    uint32_t  cf_count;
+    uint32_t  cf_cap;
 } OxlWorksheet;
 
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path);
@@ -175,3 +223,7 @@ void oxl_data_validation_free_fields(OxlDataValidation *dv);
 int  oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation *dv);
 
 /* Phase 14: no extra helper functions needed — fields are embedded structs */
+
+void oxl_cfvo_free_fields(OxlCfvo *v);
+void oxl_cf_rule_free_fields(OxlCfRule *rule);
+int  oxl_worksheet_add_cf_rule(OxlWorksheet *ws, const char *sqref, const OxlCfRule *rule);

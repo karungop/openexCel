@@ -120,6 +120,9 @@ void oxl_styles_init(OxlStyles *s) {
     s->borders = NULL;
     s->border_count = 0;
     s->border_cap = 0;
+    s->dxfs = NULL;
+    s->dxf_count = 0;
+    s->dxf_cap = 0;
 }
 
 void oxl_styles_free(OxlStyles *s) {
@@ -175,6 +178,18 @@ void oxl_styles_free(OxlStyles *s) {
     }
     s->border_count = 0;
     s->border_cap = 0;
+
+    if (s->dxfs) {
+        for (uint32_t i = 0; i < s->dxf_count; i++) {
+            if (s->dxfs[i].font) { oxl_font_def_free_fields(s->dxfs[i].font); free(s->dxfs[i].font); }
+            if (s->dxfs[i].fill) { oxl_fill_def_free_fields(s->dxfs[i].fill); free(s->dxfs[i].fill); }
+            if (s->dxfs[i].border) { oxl_border_def_free_fields(s->dxfs[i].border); free(s->dxfs[i].border); }
+        }
+        free(s->dxfs);
+        s->dxfs = NULL;
+    }
+    s->dxf_count = 0;
+    s->dxf_cap = 0;
 
     s->xf_count = 0;
 }
@@ -695,6 +710,52 @@ static void write_border_side(OxlXmlBuf *b, const char *tag, const OxlBorderSide
     }
 }
 
+/* Phase 16: DXF helpers */
+
+uint32_t oxl_styles_add_dxf(OxlStyles *s, const OxlFontDef *font,
+                              const OxlFillDef *fill, const OxlBorderDef *border) {
+    if (s->dxf_count >= s->dxf_cap) {
+        uint32_t cap = s->dxf_cap ? s->dxf_cap * 2 : 8;
+        OxlDxf *p = realloc(s->dxfs, cap * sizeof(OxlDxf));
+        if (!p) return 0;
+        s->dxfs = p;
+        s->dxf_cap = cap;
+    }
+    OxlDxf *d = &s->dxfs[s->dxf_count];
+    memset(d, 0, sizeof(*d));
+    if (font) {
+        d->font = calloc(1, sizeof(OxlFontDef));
+        if (d->font) {
+            *d->font = *font;
+            d->font->name = font->name ? strdup(font->name) : NULL;
+        }
+    }
+    if (fill) {
+        d->fill = calloc(1, sizeof(OxlFillDef));
+        if (d->fill) {
+            *d->fill = *fill;
+            d->fill->pattern_type = fill->pattern_type ? strdup(fill->pattern_type) : NULL;
+        }
+    }
+    if (border) {
+        d->border = calloc(1, sizeof(OxlBorderDef));
+        if (d->border) {
+            *d->border = *border;
+            d->border->left.style     = border->left.style     ? strdup(border->left.style)     : NULL;
+            d->border->right.style    = border->right.style    ? strdup(border->right.style)    : NULL;
+            d->border->top.style      = border->top.style      ? strdup(border->top.style)      : NULL;
+            d->border->bottom.style   = border->bottom.style   ? strdup(border->bottom.style)   : NULL;
+            d->border->diagonal.style = border->diagonal.style ? strdup(border->diagonal.style) : NULL;
+        }
+    }
+    return s->dxf_count++;
+}
+
+const OxlDxf *oxl_styles_get_dxf(const OxlStyles *s, uint32_t dxf_id) {
+    if (!s->dxfs || dxf_id >= s->dxf_count) return NULL;
+    return &s->dxfs[dxf_id];
+}
+
 /* Emit styles.xml content into buffer */
 void oxl_write_styles(OxlXmlBuf *b, const OxlStyles *s) {
     oxl_xmlbuf_cstr(b, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
@@ -886,5 +947,65 @@ void oxl_write_styles(OxlXmlBuf *b, const OxlStyles *s) {
             oxl_xmlbuf_cstr(b, "/>");
         }
     }
-    oxl_xmlbuf_cstr(b, "</cellXfs></styleSheet>");
+    oxl_xmlbuf_cstr(b, "</cellXfs>");
+
+    /* Phase 16: <dxfs> — differential formatting records for conditional formatting */
+    if (s->dxf_count > 0) {
+        oxl_xmlbuf_cstr(b, "<dxfs count=\"");
+        oxl_xmlbuf_uint(b, s->dxf_count);
+        oxl_xmlbuf_cstr(b, "\">");
+        for (uint32_t i = 0; i < s->dxf_count; i++) {
+            const OxlDxf *dxf = &s->dxfs[i];
+            oxl_xmlbuf_cstr(b, "<dxf>");
+            if (dxf->font) {
+                const OxlFontDef *f = dxf->font;
+                oxl_xmlbuf_cstr(b, "<font>");
+                if (f->bold)   oxl_xmlbuf_cstr(b, "<b/>");
+                if (f->italic) oxl_xmlbuf_cstr(b, "<i/>");
+                if (f->underline == 1) oxl_xmlbuf_cstr(b, "<u/>");
+                else if (f->underline == 2) oxl_xmlbuf_cstr(b, "<u val=\"double\"/>");
+                if (f->size > 0) {
+                    char buf[32]; snprintf(buf, sizeof(buf), "%.6g", (double)f->size);
+                    oxl_xmlbuf_cstr(b, "<sz val=\""); oxl_xmlbuf_cstr(b, buf); oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                if (f->color_rgb) {
+                    oxl_xmlbuf_cstr(b, "<color rgb=\""); write_argb_color(b, f->color_rgb); oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                if (f->name) {
+                    oxl_xmlbuf_cstr(b, "<name val=\""); oxl_xmlbuf_attr_val(b, f->name); oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                oxl_xmlbuf_cstr(b, "</font>");
+            }
+            if (dxf->fill) {
+                const OxlFillDef *f = dxf->fill;
+                oxl_xmlbuf_cstr(b, "<fill><patternFill");
+                if (f->pattern_type) {
+                    oxl_xmlbuf_cstr(b, " patternType=\"");
+                    oxl_xmlbuf_cstr(b, f->pattern_type);
+                    oxl_xmlbuf_cstr(b, "\"");
+                }
+                oxl_xmlbuf_raw(b, ">", 1);
+                if (f->fg_has_color && f->fg_rgb) {
+                    oxl_xmlbuf_cstr(b, "<fgColor rgb=\""); write_argb_color(b, f->fg_rgb); oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                if (f->bg_has_color && f->bg_rgb) {
+                    oxl_xmlbuf_cstr(b, "<bgColor rgb=\""); write_argb_color(b, f->bg_rgb); oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                oxl_xmlbuf_cstr(b, "</patternFill></fill>");
+            }
+            if (dxf->border) {
+                const OxlBorderDef *bd = dxf->border;
+                oxl_xmlbuf_cstr(b, "<border>");
+                write_border_side(b, "left",   &bd->left);
+                write_border_side(b, "right",  &bd->right);
+                write_border_side(b, "top",    &bd->top);
+                write_border_side(b, "bottom", &bd->bottom);
+                oxl_xmlbuf_cstr(b, "</border>");
+            }
+            oxl_xmlbuf_cstr(b, "</dxf>");
+        }
+        oxl_xmlbuf_cstr(b, "</dxfs>");
+    }
+
+    oxl_xmlbuf_cstr(b, "</styleSheet>");
 }

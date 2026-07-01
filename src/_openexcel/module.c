@@ -29,6 +29,7 @@ static PyTypeObject PyXlPageSetupType;
 static PyTypeObject PyXlPageMarginsType;
 static PyTypeObject PyXlPrintOptionsType;
 static PyTypeObject PyXlSheetProtectionType;
+static PyTypeObject PyXlCFRuleType;
 
 /* ========== PyWorkbookObject ========== */
 
@@ -1726,6 +1727,196 @@ static PyTypeObject PyXlSheetProtectionType = {
     .tp_getset    = sp_getset,
 };
 
+/* ========== Phase 16: ConditionalFormattingRule type ========== */
+
+typedef struct {
+    PyObject_HEAD
+    char    *type;
+    char    *operator_;
+    char    *formula;
+    char    *formula2;
+    char    *text;
+    int      priority;
+    int      stop_if_true;
+    PyObject *font_obj;
+    PyObject *fill_obj;
+    PyObject *border_obj;
+    int      top10_top;
+    int      top10_percent;
+    int      top10_rank;
+    int      above_avg;
+    int      equal_avg;
+    PyObject *color_scale;
+    char    *data_bar_color;
+    int      data_bar_show_value;
+} PyXlCFRuleObject;
+
+static void cfrule_dealloc(PyXlCFRuleObject *self) {
+    free(self->type);
+    free(self->operator_);
+    free(self->formula);
+    free(self->formula2);
+    free(self->text);
+    Py_XDECREF(self->font_obj);
+    Py_XDECREF(self->fill_obj);
+    Py_XDECREF(self->border_obj);
+    Py_XDECREF(self->color_scale);
+    free(self->data_bar_color);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *cfrule_new(PyTypeObject *tp, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyXlCFRuleObject *self = (PyXlCFRuleObject *)tp->tp_alloc(tp, 0);
+    if (!self) return NULL;
+    /* tp_alloc zeros — set non-zero defaults */
+    self->top10_top = 1;
+    self->top10_rank = 10;
+    self->above_avg = 1;
+    self->data_bar_show_value = 1;
+    Py_INCREF(Py_None); self->font_obj    = Py_None;
+    Py_INCREF(Py_None); self->fill_obj    = Py_None;
+    Py_INCREF(Py_None); self->border_obj  = Py_None;
+    Py_INCREF(Py_None); self->color_scale = Py_None;
+    return (PyObject *)self;
+}
+
+static int cfrule_init(PyXlCFRuleObject *self, PyObject *args, PyObject *kw) {
+    /* 18 keyword args:
+       type, operator, formula, formula2, text, priority, stop_if_true,
+       font, fill, border, top10_top, top10_percent, top10_rank,
+       above_average, equal_average, color_scale, data_bar_color, data_bar_show_value */
+    static char *kwlist[] = {
+        "type","operator","formula","formula2","text","priority","stop_if_true",
+        "font","fill","border","top10_top","top10_percent","top10_rank",
+        "above_average","equal_average","color_scale","data_bar_color","data_bar_show_value",
+        NULL
+    };
+    char *type_s=NULL, *op_s=NULL, *f1=NULL, *f2=NULL, *text_s=NULL;
+    int priority=0, stop_if_true=0;
+    PyObject *font_o=NULL, *fill_o=NULL, *border_o=NULL;
+    int top10_top=1, top10_percent=0, top10_rank=10;
+    int above_avg=1, equal_avg=0;
+    PyObject *color_scale_o=NULL;
+    char *db_color=NULL;
+    int db_show_value=1;
+
+    /* Format: |zzzzz ii OOO iiiii O z i  = 18 */
+    if (!PyArg_ParseTupleAndKeywords(args, kw,
+            "|zzzzziiOOOiiiiiOzi", kwlist,
+            &type_s, &op_s, &f1, &f2, &text_s,
+            &priority, &stop_if_true,
+            &font_o, &fill_o, &border_o,
+            &top10_top, &top10_percent, &top10_rank,
+            &above_avg, &equal_avg,
+            &color_scale_o, &db_color, &db_show_value))
+        return -1;
+
+    free(self->type);      self->type      = type_s  ? strdup(type_s)  : NULL;
+    free(self->operator_); self->operator_ = op_s    ? strdup(op_s)    : NULL;
+    free(self->formula);   self->formula   = f1      ? strdup(f1)      : NULL;
+    free(self->formula2);  self->formula2  = f2      ? strdup(f2)      : NULL;
+    free(self->text);      self->text      = text_s  ? strdup(text_s)  : NULL;
+    self->priority        = priority;
+    self->stop_if_true    = stop_if_true;
+    self->top10_top       = top10_top;
+    self->top10_percent   = top10_percent;
+    self->top10_rank      = top10_rank;
+    self->above_avg       = above_avg;
+    self->equal_avg       = equal_avg;
+    self->data_bar_show_value = db_show_value;
+
+    free(self->data_bar_color);
+    self->data_bar_color = db_color ? strdup(db_color) : NULL;
+
+    if (font_o && font_o != Py_None) {
+        Py_INCREF(font_o); Py_XDECREF(self->font_obj); self->font_obj = font_o;
+    }
+    if (fill_o && fill_o != Py_None) {
+        Py_INCREF(fill_o); Py_XDECREF(self->fill_obj); self->fill_obj = fill_o;
+    }
+    if (border_o && border_o != Py_None) {
+        Py_INCREF(border_o); Py_XDECREF(self->border_obj); self->border_obj = border_o;
+    }
+    if (color_scale_o && color_scale_o != Py_None) {
+        Py_INCREF(color_scale_o); Py_XDECREF(self->color_scale); self->color_scale = color_scale_o;
+    }
+    return 0;
+}
+
+static PyObject *cfrule_get_type(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    return Py_BuildValue("z", self->type);
+}
+static PyObject *cfrule_get_operator(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    return Py_BuildValue("z", self->operator_);
+}
+static PyObject *cfrule_get_formula(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    return Py_BuildValue("z", self->formula);
+}
+static PyObject *cfrule_get_formula2(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    return Py_BuildValue("z", self->formula2);
+}
+static PyObject *cfrule_get_text(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    return Py_BuildValue("z", self->text);
+}
+static PyObject *cfrule_get_font(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    PyObject *r = self->font_obj ? self->font_obj : Py_None;
+    Py_INCREF(r); return r;
+}
+static PyObject *cfrule_get_fill(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    PyObject *r = self->fill_obj ? self->fill_obj : Py_None;
+    Py_INCREF(r); return r;
+}
+static PyObject *cfrule_get_border(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    PyObject *r = self->border_obj ? self->border_obj : Py_None;
+    Py_INCREF(r); return r;
+}
+static PyObject *cfrule_get_color_scale(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    PyObject *r = self->color_scale ? self->color_scale : Py_None;
+    Py_INCREF(r); return r;
+}
+static PyObject *cfrule_get_data_bar_color(PyXlCFRuleObject *self, void *Py_UNUSED(x)) {
+    return Py_BuildValue("z", self->data_bar_color);
+}
+
+static PyMemberDef cfrule_members[] = {
+    {"priority",           T_INT, offsetof(PyXlCFRuleObject, priority),           0, "Priority"},
+    {"stop_if_true",       T_INT, offsetof(PyXlCFRuleObject, stop_if_true),       0, "Stop if true"},
+    {"top10_top",          T_INT, offsetof(PyXlCFRuleObject, top10_top),          0, "Top (not bottom)"},
+    {"top10_percent",      T_INT, offsetof(PyXlCFRuleObject, top10_percent),      0, "Percent"},
+    {"top10_rank",         T_INT, offsetof(PyXlCFRuleObject, top10_rank),         0, "Rank"},
+    {"above_average",      T_INT, offsetof(PyXlCFRuleObject, above_avg),          0, "Above average"},
+    {"equal_average",      T_INT, offsetof(PyXlCFRuleObject, equal_avg),          0, "Equal average"},
+    {"data_bar_show_value",T_INT, offsetof(PyXlCFRuleObject, data_bar_show_value),0, "Show value"},
+    {NULL}
+};
+
+static PyGetSetDef cfrule_getset[] = {
+    {"type",           (getter)cfrule_get_type,           NULL, "Rule type", NULL},
+    {"operator",       (getter)cfrule_get_operator,       NULL, "Operator", NULL},
+    {"formula",        (getter)cfrule_get_formula,        NULL, "Formula 1", NULL},
+    {"formula2",       (getter)cfrule_get_formula2,       NULL, "Formula 2", NULL},
+    {"text",           (getter)cfrule_get_text,           NULL, "Text", NULL},
+    {"font",           (getter)cfrule_get_font,           NULL, "Font", NULL},
+    {"fill",           (getter)cfrule_get_fill,           NULL, "Fill", NULL},
+    {"border",         (getter)cfrule_get_border,         NULL, "Border", NULL},
+    {"color_scale",    (getter)cfrule_get_color_scale,    NULL, "Color scale list", NULL},
+    {"data_bar_color", (getter)cfrule_get_data_bar_color, NULL, "Data bar color", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyXlCFRuleType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_openexcel.ConditionalFormattingRule",
+    .tp_basicsize = sizeof(PyXlCFRuleObject),
+    .tp_dealloc   = (destructor)cfrule_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = cfrule_new,
+    .tp_init      = (initproc)cfrule_init,
+    .tp_members   = cfrule_members,
+    .tp_getset    = cfrule_getset,
+};
+
 /* ========== Phase 3: Cell XF context helper ========== */
 
 static void get_cell_xf_context(PyXlCellObject *self,
@@ -2633,6 +2824,184 @@ static PyObject *ws_get_data_validations(PyObject *self, void *closure) {
     return list;
 }
 
+/* ── Phase 16: Conditional Formatting ───────────────────────────────────── */
+
+static PyObject *ws_add_conditional_formatting(PyObject *self, PyObject *args) {
+    const char *sqref = NULL;
+    PyXlCFRuleObject *rule_obj = NULL;
+    if (!PyArg_ParseTuple(args, "sO!", &sqref, &PyXlCFRuleType, &rule_obj))
+        return NULL;
+
+    OxlCfRule rule;
+    memset(&rule, 0, sizeof(rule));
+    rule.dxf_id = -1;
+    rule.type       = rule_obj->type;
+    rule.operator_  = rule_obj->operator_;
+    rule.formula    = rule_obj->formula;
+    rule.formula2   = rule_obj->formula2;
+    rule.text       = rule_obj->text;
+    rule.priority   = rule_obj->priority;
+    rule.stop_if_true = (uint8_t)rule_obj->stop_if_true;
+    rule.top10_top  = (uint8_t)rule_obj->top10_top;
+    rule.top10_percent = (uint8_t)rule_obj->top10_percent;
+    rule.top10_rank = (uint32_t)rule_obj->top10_rank;
+    rule.above_avg  = (uint8_t)rule_obj->above_avg;
+    rule.equal_avg  = (uint8_t)rule_obj->equal_avg;
+    rule.data_bar_show_value = (uint8_t)rule_obj->data_bar_show_value;
+
+    /* Extract font from font_obj if set */
+    OxlFontDef font_def;
+    memset(&font_def, 0, sizeof(font_def));
+    if (rule_obj->font_obj && rule_obj->font_obj != Py_None
+        && PyObject_TypeCheck(rule_obj->font_obj, &PyFontType)) {
+        PyFontObject *fo = (PyFontObject *)rule_obj->font_obj;
+        font_def.name = fo->name;
+        font_def.size = (float)fo->size;
+        font_def.bold = fo->bold;
+        font_def.italic = fo->italic;
+        font_def.underline = fo->underline;
+        font_def.color_rgb = fo->color ? parse_color_str(fo->color) : 0;
+        rule.font = &font_def;
+    }
+
+    /* Extract fill from fill_obj if set */
+    OxlFillDef fill_def;
+    memset(&fill_def, 0, sizeof(fill_def));
+    if (rule_obj->fill_obj && rule_obj->fill_obj != Py_None
+        && PyObject_TypeCheck(rule_obj->fill_obj, &PyPatternFillType)) {
+        PyPatternFillObject *fo = (PyPatternFillObject *)rule_obj->fill_obj;
+        fill_def.pattern_type = fo->fill_type;
+        if (fo->fg_color) {
+            fill_def.fg_rgb = parse_color_str(fo->fg_color);
+            fill_def.fg_has_color = (fill_def.fg_rgb != 0) ? 1 : 0;
+        }
+        if (fo->bg_color) {
+            fill_def.bg_rgb = parse_color_str(fo->bg_color);
+            fill_def.bg_has_color = (fill_def.bg_rgb != 0) ? 1 : 0;
+        }
+        rule.fill = &fill_def;
+    }
+
+    /* Extract border from border_obj if set */
+    OxlBorderDef border_def;
+    memset(&border_def, 0, sizeof(border_def));
+    if (rule_obj->border_obj && rule_obj->border_obj != Py_None
+        && PyObject_TypeCheck(rule_obj->border_obj, &PyBorderType)) {
+        PyBorderObject *bo = (PyBorderObject *)rule_obj->border_obj;
+        if (bo->left != Py_None && PyObject_TypeCheck(bo->left, &PySideType)) {
+            PySideObject *s = (PySideObject *)bo->left;
+            border_def.left.style = s->style;
+            if (s->color) { border_def.left.color_rgb = parse_color_str(s->color); border_def.left.has_color = 1; }
+        }
+        if (bo->right != Py_None && PyObject_TypeCheck(bo->right, &PySideType)) {
+            PySideObject *s = (PySideObject *)bo->right;
+            border_def.right.style = s->style;
+            if (s->color) { border_def.right.color_rgb = parse_color_str(s->color); border_def.right.has_color = 1; }
+        }
+        if (bo->top != Py_None && PyObject_TypeCheck(bo->top, &PySideType)) {
+            PySideObject *s = (PySideObject *)bo->top;
+            border_def.top.style = s->style;
+            if (s->color) { border_def.top.color_rgb = parse_color_str(s->color); border_def.top.has_color = 1; }
+        }
+        if (bo->bottom != Py_None && PyObject_TypeCheck(bo->bottom, &PySideType)) {
+            PySideObject *s = (PySideObject *)bo->bottom;
+            border_def.bottom.style = s->style;
+            if (s->color) { border_def.bottom.color_rgb = parse_color_str(s->color); border_def.bottom.has_color = 1; }
+        }
+        rule.border = &border_def;
+    }
+
+    /* Handle colorScale */
+    if (rule_obj->color_scale && rule_obj->color_scale != Py_None
+        && PyList_Check(rule_obj->color_scale)) {
+        Py_ssize_t n = PyList_Size(rule_obj->color_scale);
+        if (n > 3) n = 3;
+        rule.cfvo_count = (uint32_t)n;
+        rule.color_count = (uint32_t)n;
+        for (Py_ssize_t k = 0; k < n; k++) {
+            if (k == 0) rule.cfvos[k].type = "min";
+            else if (k == (n-1)) rule.cfvos[k].type = "max";
+            else { rule.cfvos[k].type = "percentile"; rule.cfvos[k].val = "50"; }
+            PyObject *item = PyList_GetItem(rule_obj->color_scale, k);
+            const char *color_s = item ? PyUnicode_AsUTF8(item) : NULL;
+            if (color_s) rule.colors[k] = (uint32_t)strtoul(color_s, NULL, 16);
+        }
+    }
+
+    /* Handle dataBar color */
+    if (rule_obj->data_bar_color) {
+        rule.cfvo_count = 2;
+        rule.cfvos[0].type = "min";
+        rule.cfvos[1].type = "max";
+        rule.colors[0] = (uint32_t)strtoul(rule_obj->data_bar_color, NULL, 16);
+        rule.color_count = 1;
+    }
+
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    if (oxl_worksheet_add_cf_rule(ws, sqref, &rule) != 0) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *ws_get_conditional_formatting(PyObject *self, void *closure) {
+    (void)closure;
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyObject *result = PyList_New((Py_ssize_t)ws->cf_count);
+    if (!result) return NULL;
+    for (uint32_t i = 0; i < ws->cf_count; i++) {
+        const OxlCf *cf = &ws->cond_fmts[i];
+        PyObject *rules_list = PyList_New((Py_ssize_t)cf->rule_count);
+        if (!rules_list) { Py_DECREF(result); return NULL; }
+        for (uint32_t j = 0; j < cf->rule_count; j++) {
+            const OxlCfRule *r = &cf->rules[j];
+            PyXlCFRuleObject *rule_py = (PyXlCFRuleObject *)PyXlCFRuleType.tp_alloc(&PyXlCFRuleType, 0);
+            if (!rule_py) { Py_DECREF(rules_list); Py_DECREF(result); return NULL; }
+            /* tp_alloc zeros memory */
+            rule_py->type      = r->type      ? strdup(r->type)      : NULL;
+            rule_py->operator_ = r->operator_ ? strdup(r->operator_) : NULL;
+            rule_py->formula   = r->formula   ? strdup(r->formula)   : NULL;
+            rule_py->formula2  = r->formula2  ? strdup(r->formula2)  : NULL;
+            rule_py->text      = r->text      ? strdup(r->text)      : NULL;
+            rule_py->priority  = r->priority;
+            rule_py->stop_if_true = r->stop_if_true;
+            rule_py->top10_top = r->top10_top;
+            rule_py->top10_percent = r->top10_percent;
+            rule_py->top10_rank = (int)r->top10_rank;
+            rule_py->above_avg = r->above_avg;
+            rule_py->equal_avg = r->equal_avg;
+            rule_py->data_bar_show_value = r->data_bar_show_value;
+            Py_INCREF(Py_None); rule_py->font_obj    = Py_None;
+            Py_INCREF(Py_None); rule_py->fill_obj    = Py_None;
+            Py_INCREF(Py_None); rule_py->border_obj  = Py_None;
+            Py_INCREF(Py_None); rule_py->color_scale = Py_None;
+            rule_py->data_bar_color = NULL;
+            /* Reconstruct color_scale list if applicable */
+            if (r->color_count > 0 && r->cfvo_count > 0) {
+                PyObject *cl = PyList_New((Py_ssize_t)r->color_count);
+                if (cl) {
+                    for (uint32_t k = 0; k < r->color_count; k++) {
+                        char hex[9];
+                        snprintf(hex, sizeof(hex), "%08X", r->colors[k]);
+                        PyList_SET_ITEM(cl, (Py_ssize_t)k, PyUnicode_FromString(hex));
+                    }
+                    Py_DECREF(rule_py->color_scale);
+                    rule_py->color_scale = cl;
+                }
+            }
+            PyList_SET_ITEM(rules_list, (Py_ssize_t)j, (PyObject *)rule_py);
+        }
+        PyObject *sqref_str = PyUnicode_FromString(cf->sqref ? cf->sqref : "");
+        PyObject *tup = PyTuple_Pack(2, sqref_str, rules_list);
+        Py_XDECREF(sqref_str);
+        Py_DECREF(rules_list);
+        if (!tup) { Py_DECREF(result); return NULL; }
+        PyList_SET_ITEM(result, (Py_ssize_t)i, tup);
+    }
+    return result;
+}
+
 /* ── Phase 14: page_setup, page_margins, print_options getters/setters ───── */
 
 static PyObject *ws_get_page_setup(PyObject *self, void *Py_UNUSED(x)) {
@@ -2840,7 +3209,8 @@ static PyMethodDef worksheet_methods[] = {
     {"unmerge_cells",    (PyCFunction)worksheet_unmerge_cells,  METH_VARARGS,  "unmerge_cells('A1:C3')"},
     {"set_column_width", (PyCFunction)(void(*)(void))worksheet_set_column_width, METH_VARARGS|METH_KEYWORDS, "set_column_width(col, width, hidden=False)"},
     {"set_row_height",         (PyCFunction)(void(*)(void))worksheet_set_row_height,   METH_VARARGS|METH_KEYWORDS, "set_row_height(row, height, hidden=False)"},
-    {"add_data_validation",    (PyCFunction)ws_add_data_validation,                    METH_VARARGS,               "add_data_validation(dv)"},
+    {"add_data_validation",          (PyCFunction)ws_add_data_validation,             METH_VARARGS, "add_data_validation(dv)"},
+    {"add_conditional_formatting",   (PyCFunction)ws_add_conditional_formatting,       METH_VARARGS, "add_conditional_formatting(sqref, rule)"},
     {NULL, NULL}
 };
 
@@ -2858,7 +3228,8 @@ static PyGetSetDef worksheet_getset[] = {
     {"page_setup",        (getter)ws_get_page_setup,             (setter)ws_set_page_setup,             "Page setup",         NULL},
     {"page_margins",      (getter)ws_get_page_margins,           (setter)ws_set_page_margins,           "Page margins",       NULL},
     {"print_options",     (getter)ws_get_print_options,          (setter)ws_set_print_options,          "Print options",      NULL},
-    {"protection",        (getter)ws_get_protection,             (setter)ws_set_protection,             "Sheet protection",   NULL},
+    {"protection",             (getter)ws_get_protection,             (setter)ws_set_protection,             "Sheet protection",       NULL},
+    {"conditional_formatting", (getter)ws_get_conditional_formatting,  NULL,                                  "Conditional formatting", NULL},
     {NULL}
 };
 
@@ -3121,6 +3492,7 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     if (PyType_Ready(&PyXlPageMarginsType) < 0)      return NULL;
     if (PyType_Ready(&PyXlPrintOptionsType) < 0)     return NULL;
     if (PyType_Ready(&PyXlSheetProtectionType) < 0)      return NULL;
+    if (PyType_Ready(&PyXlCFRuleType) < 0)               return NULL;
 
     PyObject *mod = PyModule_Create(&moduledef);
     if (!mod) return NULL;
@@ -3187,6 +3559,11 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     Py_INCREF(&PyXlSheetProtectionType);
     if (PyModule_AddObject(mod, "SheetProtection", (PyObject *)&PyXlSheetProtectionType) < 0) {
         Py_DECREF(&PyXlSheetProtectionType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyXlCFRuleType);
+    if (PyModule_AddObject(mod, "ConditionalFormattingRule", (PyObject *)&PyXlCFRuleType) < 0) {
+        Py_DECREF(&PyXlCFRuleType); Py_DECREF(mod); return NULL;
     }
 
     return mod;
