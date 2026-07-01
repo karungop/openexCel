@@ -28,6 +28,7 @@ static PyTypeObject PyXlDataValidationType;
 static PyTypeObject PyXlPageSetupType;
 static PyTypeObject PyXlPageMarginsType;
 static PyTypeObject PyXlPrintOptionsType;
+static PyTypeObject PyXlSheetProtectionType;
 
 /* ========== PyWorkbookObject ========== */
 
@@ -1271,6 +1272,66 @@ static PyObject *pagesetup_new(PyTypeObject *type, PyObject *args, PyObject *kw)
         self->fit_to_width = 0;
         self->fit_to_height = 0;
         self->fit_to_page  = 0;
+/* ---- PyXlSheetProtectionObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    char *password_hash;
+    char *algorithm_name;
+    char *hash_value;
+    char *salt_value;
+    int   spin_count;
+    int   sheet;
+    int   objects;
+    int   scenarios;
+    int   format_cells;
+    int   format_columns;
+    int   format_rows;
+    int   insert_columns;
+    int   insert_rows;
+    int   insert_hyperlinks;
+    int   delete_columns;
+    int   delete_rows;
+    int   select_locked;
+    int   sort;
+    int   auto_filter;
+    int   pivot_tables;
+    int   select_unlocked;
+} PyXlSheetProtectionObject;
+
+static void sp_dealloc(PyXlSheetProtectionObject *self) {
+    free(self->password_hash);
+    free(self->algorithm_name);
+    free(self->hash_value);
+    free(self->salt_value);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *sp_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyXlSheetProtectionObject *self = (PyXlSheetProtectionObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->password_hash  = NULL;
+        self->algorithm_name = NULL;
+        self->hash_value     = NULL;
+        self->salt_value     = NULL;
+        self->spin_count     = 0;
+        self->sheet          = 1;  /* default: sheet locked */
+        self->objects        = 0;
+        self->scenarios      = 0;
+        self->format_cells   = 0;
+        self->format_columns = 0;
+        self->format_rows    = 0;
+        self->insert_columns = 0;
+        self->insert_rows    = 0;
+        self->insert_hyperlinks = 0;
+        self->delete_columns = 0;
+        self->delete_rows    = 0;
+        self->select_locked  = 0;
+        self->sort           = 0;
+        self->auto_filter    = 0;
+        self->pivot_tables   = 0;
+        self->select_unlocked = 0;
     }
     return (PyObject *)self;
 }
@@ -1481,6 +1542,180 @@ static PyTypeObject PyXlPrintOptionsType = {
     .tp_new       = printoptions_new,
     .tp_init      = (initproc)printoptions_init,
     .tp_getset    = printoptions_getset,
+static int sp_init(PyXlSheetProtectionObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {
+        "sheet", "password", "objects", "scenarios",
+        "format_cells", "format_columns", "format_rows",
+        "insert_columns", "insert_rows", "insert_hyperlinks",
+        "delete_columns", "delete_rows", "select_locked",
+        "sort", "auto_filter", "pivot_tables", "select_unlocked",
+        "algorithm_name", "hash_value", "salt_value", "spin_count",
+        NULL
+    };
+    int   sheet          = 1;
+    const char *password = NULL;
+    int   objects        = 0;
+    int   scenarios      = 0;
+    int   format_cells   = 0;
+    int   format_columns = 0;
+    int   format_rows    = 0;
+    int   insert_columns = 0;
+    int   insert_rows    = 0;
+    int   insert_hyperlinks = 0;
+    int   delete_columns = 0;
+    int   delete_rows    = 0;
+    int   select_locked  = 0;
+    int   sort           = 0;
+    int   auto_filter    = 0;
+    int   pivot_tables   = 0;
+    int   select_unlocked = 0;
+    const char *algorithm_name = NULL;
+    const char *hash_value     = NULL;
+    const char *salt_value     = NULL;
+    int   spin_count     = 0;
+
+    /* Format: | i z i i i i i i i i i i i i i i i z z z i  = 21 specifiers */
+    if (!PyArg_ParseTupleAndKeywords(args, kw,
+            "|iziiiiiiiiiiiiiiiizzzi", kwlist,
+            &sheet, &password, &objects, &scenarios,
+            &format_cells, &format_columns, &format_rows,
+            &insert_columns, &insert_rows, &insert_hyperlinks,
+            &delete_columns, &delete_rows, &select_locked,
+            &sort, &auto_filter, &pivot_tables, &select_unlocked,
+            &algorithm_name, &hash_value, &salt_value, &spin_count))
+        return -1;
+
+    free(self->password_hash);
+    self->password_hash  = password      ? strdup(password)      : NULL;
+    free(self->algorithm_name);
+    self->algorithm_name = algorithm_name ? strdup(algorithm_name) : NULL;
+    free(self->hash_value);
+    self->hash_value     = hash_value    ? strdup(hash_value)    : NULL;
+    free(self->salt_value);
+    self->salt_value     = salt_value    ? strdup(salt_value)    : NULL;
+
+    self->spin_count      = spin_count;
+    self->sheet           = sheet;
+    self->objects         = objects;
+    self->scenarios       = scenarios;
+    self->format_cells    = format_cells;
+    self->format_columns  = format_columns;
+    self->format_rows     = format_rows;
+    self->insert_columns  = insert_columns;
+    self->insert_rows     = insert_rows;
+    self->insert_hyperlinks = insert_hyperlinks;
+    self->delete_columns  = delete_columns;
+    self->delete_rows     = delete_rows;
+    self->select_locked   = select_locked;
+    self->sort            = sort;
+    self->auto_filter     = auto_filter;
+    self->pivot_tables    = pivot_tables;
+    self->select_unlocked = select_unlocked;
+    return 0;
+}
+
+static PyObject *sp_get_password(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    if (!self->password_hash) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->password_hash);
+}
+static PyObject *sp_get_algorithm_name(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    if (!self->algorithm_name) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->algorithm_name);
+}
+static PyObject *sp_get_hash_value(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    if (!self->hash_value) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->hash_value);
+}
+static PyObject *sp_get_salt_value(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    if (!self->salt_value) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->salt_value);
+}
+static PyObject *sp_get_spin_count(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->spin_count);
+}
+static PyObject *sp_get_sheet(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->sheet);
+}
+static PyObject *sp_get_objects(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->objects);
+}
+static PyObject *sp_get_scenarios(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->scenarios);
+}
+static PyObject *sp_get_format_cells(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->format_cells);
+}
+static PyObject *sp_get_format_columns(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->format_columns);
+}
+static PyObject *sp_get_format_rows(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->format_rows);
+}
+static PyObject *sp_get_insert_columns(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->insert_columns);
+}
+static PyObject *sp_get_insert_rows(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->insert_rows);
+}
+static PyObject *sp_get_insert_hyperlinks(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->insert_hyperlinks);
+}
+static PyObject *sp_get_delete_columns(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->delete_columns);
+}
+static PyObject *sp_get_delete_rows(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->delete_rows);
+}
+static PyObject *sp_get_select_locked(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->select_locked);
+}
+static PyObject *sp_get_sort(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->sort);
+}
+static PyObject *sp_get_auto_filter(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->auto_filter);
+}
+static PyObject *sp_get_pivot_tables(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->pivot_tables);
+}
+static PyObject *sp_get_select_unlocked(PyXlSheetProtectionObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->select_unlocked);
+}
+
+static PyGetSetDef sp_getset[] = {
+    {"password",          (getter)sp_get_password,          NULL, "Legacy password hash", NULL},
+    {"algorithm_name",    (getter)sp_get_algorithm_name,    NULL, "Algorithm name", NULL},
+    {"hash_value",        (getter)sp_get_hash_value,        NULL, "Hash value (base64)", NULL},
+    {"salt_value",        (getter)sp_get_salt_value,        NULL, "Salt value (base64)", NULL},
+    {"spin_count",        (getter)sp_get_spin_count,        NULL, "Spin count", NULL},
+    {"sheet",             (getter)sp_get_sheet,             NULL, "Sheet locked", NULL},
+    {"objects",           (getter)sp_get_objects,           NULL, "Objects locked", NULL},
+    {"scenarios",         (getter)sp_get_scenarios,         NULL, "Scenarios locked", NULL},
+    {"format_cells",      (getter)sp_get_format_cells,      NULL, "Format cells allowed", NULL},
+    {"format_columns",    (getter)sp_get_format_columns,    NULL, "Format columns allowed", NULL},
+    {"format_rows",       (getter)sp_get_format_rows,       NULL, "Format rows allowed", NULL},
+    {"insert_columns",    (getter)sp_get_insert_columns,    NULL, "Insert columns allowed", NULL},
+    {"insert_rows",       (getter)sp_get_insert_rows,       NULL, "Insert rows allowed", NULL},
+    {"insert_hyperlinks", (getter)sp_get_insert_hyperlinks, NULL, "Insert hyperlinks allowed", NULL},
+    {"delete_columns",    (getter)sp_get_delete_columns,    NULL, "Delete columns allowed", NULL},
+    {"delete_rows",       (getter)sp_get_delete_rows,       NULL, "Delete rows allowed", NULL},
+    {"select_locked",     (getter)sp_get_select_locked,     NULL, "Select locked cells allowed", NULL},
+    {"sort",              (getter)sp_get_sort,              NULL, "Sort allowed", NULL},
+    {"auto_filter",       (getter)sp_get_auto_filter,       NULL, "Auto filter allowed", NULL},
+    {"pivot_tables",      (getter)sp_get_pivot_tables,      NULL, "Pivot tables allowed", NULL},
+    {"select_unlocked",   (getter)sp_get_select_unlocked,   NULL, "Select unlocked cells allowed", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyXlSheetProtectionType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "openexcel.SheetProtection",
+    .tp_basicsize = sizeof(PyXlSheetProtectionObject),
+    .tp_dealloc   = (destructor)sp_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = sp_new,
+    .tp_init      = (initproc)sp_init,
+    .tp_getset    = sp_getset,
 };
 
 /* ========== Phase 3: Cell XF context helper ========== */
@@ -2479,6 +2714,104 @@ static int ws_set_print_options(PyObject *self, PyObject *value, void *Py_UNUSED
     ws->print_options.horizontal_centered = (uint8_t)(po->horizontal_centered ? 1 : 0);
     ws->print_options.vertical_centered   = (uint8_t)(po->vertical_centered ? 1 : 0);
     ws->print_options.has_options         = 1;
+/* ── Phase 15: Sheet protection ──────────────────────────────────────────── */
+
+static PyObject *ws_get_protection(PyObject *self, void *closure) {
+    (void)closure;
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    if (!ws->protection.has_protection) Py_RETURN_NONE;
+    const OxlSheetProtection *p = &ws->protection;
+    PyXlSheetProtectionObject *obj = (PyXlSheetProtectionObject *)
+        PyXlSheetProtectionType.tp_alloc(&PyXlSheetProtectionType, 0);
+    if (!obj) return NULL;
+    obj->password_hash  = p->password_hash  ? strdup(p->password_hash)  : NULL;
+    obj->algorithm_name = p->algorithm_name ? strdup(p->algorithm_name) : NULL;
+    obj->hash_value     = p->hash_value     ? strdup(p->hash_value)     : NULL;
+    obj->salt_value     = p->salt_value     ? strdup(p->salt_value)     : NULL;
+    obj->spin_count      = (int)p->spin_count;
+    obj->sheet           = p->sheet;
+    obj->objects         = p->objects;
+    obj->scenarios       = p->scenarios;
+    obj->format_cells    = p->format_cells;
+    obj->format_columns  = p->format_columns;
+    obj->format_rows     = p->format_rows;
+    obj->insert_columns  = p->insert_columns;
+    obj->insert_rows     = p->insert_rows;
+    obj->insert_hyperlinks = p->insert_hyperlinks;
+    obj->delete_columns  = p->delete_columns;
+    obj->delete_rows     = p->delete_rows;
+    obj->select_locked   = p->select_locked;
+    obj->sort            = p->sort;
+    obj->auto_filter     = p->auto_filter;
+    obj->pivot_tables    = p->pivot_tables;
+    obj->select_unlocked = p->select_unlocked;
+    return (PyObject *)obj;
+}
+
+static int ws_set_protection(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    OxlSheetProtection *p = &ws->protection;
+
+    if (value == Py_None) {
+        /* Clear protection */
+        free(p->password_hash);  p->password_hash  = NULL;
+        free(p->algorithm_name); p->algorithm_name = NULL;
+        free(p->hash_value);     p->hash_value     = NULL;
+        free(p->salt_value);     p->salt_value     = NULL;
+        p->spin_count      = 0;
+        p->sheet           = 0;
+        p->objects         = 0;
+        p->scenarios       = 0;
+        p->format_cells    = 0;
+        p->format_columns  = 0;
+        p->format_rows     = 0;
+        p->insert_columns  = 0;
+        p->insert_rows     = 0;
+        p->insert_hyperlinks = 0;
+        p->delete_columns  = 0;
+        p->delete_rows     = 0;
+        p->select_locked   = 0;
+        p->sort            = 0;
+        p->auto_filter     = 0;
+        p->pivot_tables    = 0;
+        p->select_unlocked = 0;
+        p->has_protection  = 0;
+        return 0;
+    }
+
+    if (!PyObject_TypeCheck(value, &PyXlSheetProtectionType)) {
+        PyErr_SetString(PyExc_TypeError, "protection must be a SheetProtection object or None");
+        return -1;
+    }
+    PyXlSheetProtectionObject *sp = (PyXlSheetProtectionObject *)value;
+
+    free(p->password_hash);
+    p->password_hash  = sp->password_hash  ? strdup(sp->password_hash)  : NULL;
+    free(p->algorithm_name);
+    p->algorithm_name = sp->algorithm_name ? strdup(sp->algorithm_name) : NULL;
+    free(p->hash_value);
+    p->hash_value     = sp->hash_value     ? strdup(sp->hash_value)     : NULL;
+    free(p->salt_value);
+    p->salt_value     = sp->salt_value     ? strdup(sp->salt_value)     : NULL;
+    p->spin_count      = (uint32_t)sp->spin_count;
+    p->sheet           = (uint8_t)sp->sheet;
+    p->objects         = (uint8_t)sp->objects;
+    p->scenarios       = (uint8_t)sp->scenarios;
+    p->format_cells    = (uint8_t)sp->format_cells;
+    p->format_columns  = (uint8_t)sp->format_columns;
+    p->format_rows     = (uint8_t)sp->format_rows;
+    p->insert_columns  = (uint8_t)sp->insert_columns;
+    p->insert_rows     = (uint8_t)sp->insert_rows;
+    p->insert_hyperlinks = (uint8_t)sp->insert_hyperlinks;
+    p->delete_columns  = (uint8_t)sp->delete_columns;
+    p->delete_rows     = (uint8_t)sp->delete_rows;
+    p->select_locked   = (uint8_t)sp->select_locked;
+    p->sort            = (uint8_t)sp->sort;
+    p->auto_filter     = (uint8_t)sp->auto_filter;
+    p->pivot_tables    = (uint8_t)sp->pivot_tables;
+    p->select_unlocked = (uint8_t)sp->select_unlocked;
+    p->has_protection  = 1;
     return 0;
 }
 
@@ -2514,6 +2847,7 @@ static PyGetSetDef worksheet_getset[] = {
     {"page_setup",        (getter)ws_get_page_setup,             (setter)ws_set_page_setup,             "Page setup",         NULL},
     {"page_margins",      (getter)ws_get_page_margins,           (setter)ws_set_page_margins,           "Page margins",       NULL},
     {"print_options",     (getter)ws_get_print_options,          (setter)ws_set_print_options,          "Print options",      NULL},
+    {"protection",        (getter)ws_get_protection,             (setter)ws_set_protection,             "Sheet protection",   NULL},
     {NULL}
 };
 
@@ -2775,6 +3109,7 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     if (PyType_Ready(&PyXlPageSetupType) < 0)        return NULL;
     if (PyType_Ready(&PyXlPageMarginsType) < 0)      return NULL;
     if (PyType_Ready(&PyXlPrintOptionsType) < 0)     return NULL;
+    if (PyType_Ready(&PyXlSheetProtectionType) < 0)      return NULL;
 
     PyObject *mod = PyModule_Create(&moduledef);
     if (!mod) return NULL;
@@ -2836,6 +3171,9 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     Py_INCREF(&PyXlPrintOptionsType);
     if (PyModule_AddObject(mod, "PrintOptions", (PyObject *)&PyXlPrintOptionsType) < 0) {
         Py_DECREF(&PyXlPrintOptionsType); Py_DECREF(mod); return NULL;
+Py_INCREF(&PyXlSheetProtectionType);
+    if (PyModule_AddObject(mod, "SheetProtection", (PyObject *)&PyXlSheetProtectionType) < 0) {
+        Py_DECREF(&PyXlSheetProtectionType); Py_DECREF(mod); return NULL;
     }
 
     return mod;

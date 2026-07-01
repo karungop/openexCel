@@ -325,6 +325,54 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
         }
     }
 
+    /* Phase 15: <sheetProtection> (OOXML order: before printOptions) */
+    if (ws->protection.has_protection) {
+        const OxlSheetProtection *p = &ws->protection;
+        oxl_xmlbuf_cstr(b, "<sheetProtection");
+        if (p->algorithm_name) {
+            oxl_xmlbuf_cstr(b, " algorithmName=\"");
+            oxl_xmlbuf_text(b, p->algorithm_name);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (p->hash_value) {
+            oxl_xmlbuf_cstr(b, " hashValue=\"");
+            oxl_xmlbuf_text(b, p->hash_value);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (p->salt_value) {
+            oxl_xmlbuf_cstr(b, " saltValue=\"");
+            oxl_xmlbuf_text(b, p->salt_value);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (p->spin_count > 0) {
+            oxl_xmlbuf_cstr(b, " spinCount=\"");
+            oxl_xmlbuf_uint(b, p->spin_count);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (p->password_hash) {
+            oxl_xmlbuf_cstr(b, " password=\"");
+            oxl_xmlbuf_text(b, p->password_hash);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (p->sheet)              oxl_xmlbuf_cstr(b, " sheet=\"1\"");
+        if (p->objects)            oxl_xmlbuf_cstr(b, " objects=\"1\"");
+        if (p->scenarios)          oxl_xmlbuf_cstr(b, " scenarios=\"1\"");
+        if (p->format_cells)       oxl_xmlbuf_cstr(b, " formatCells=\"0\"");
+        if (p->format_columns)     oxl_xmlbuf_cstr(b, " formatColumns=\"0\"");
+        if (p->format_rows)        oxl_xmlbuf_cstr(b, " formatRows=\"0\"");
+        if (p->insert_columns)     oxl_xmlbuf_cstr(b, " insertColumns=\"0\"");
+        if (p->insert_rows)        oxl_xmlbuf_cstr(b, " insertRows=\"0\"");
+        if (p->insert_hyperlinks)  oxl_xmlbuf_cstr(b, " insertHyperlinks=\"0\"");
+        if (p->delete_columns)     oxl_xmlbuf_cstr(b, " deleteColumns=\"0\"");
+        if (p->delete_rows)        oxl_xmlbuf_cstr(b, " deleteRows=\"0\"");
+        if (p->select_locked)      oxl_xmlbuf_cstr(b, " selectLockedCells=\"0\"");
+        if (p->sort)               oxl_xmlbuf_cstr(b, " sort=\"0\"");
+        if (p->auto_filter)        oxl_xmlbuf_cstr(b, " autoFilter=\"0\"");
+        if (p->pivot_tables)       oxl_xmlbuf_cstr(b, " pivotTables=\"0\"");
+        if (p->select_unlocked)    oxl_xmlbuf_cstr(b, " selectUnlockedCells=\"1\"");
+        oxl_xmlbuf_cstr(b, "/>");
+    }
+
     /* Phase 14: <printOptions> */
     if (ws->print_options.has_options) {
         oxl_xmlbuf_cstr(b, "<printOptions");
@@ -339,7 +387,7 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
         oxl_xmlbuf_cstr(b, "/>");
     }
 
-    /* Phase 14: <pageMargins> — always emit (Excel requires it for printing) */
+    /* Phase 14: <pageMargins> */
     if (ws->page_margins.has_margins) {
         oxl_xmlbuf_cstr(b, "<pageMargins left=\"");
         oxl_xmlbuf_double(b, ws->page_margins.left);
@@ -374,9 +422,8 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
             oxl_xmlbuf_uint(b, ws->page_setup.scale);
             oxl_xmlbuf_raw(b, "\"", 1);
         }
-        if (ws->page_setup.fit_to_page) {
+        if (ws->page_setup.fit_to_page)
             oxl_xmlbuf_cstr(b, " fitToPage=\"1\"");
-        }
         if (ws->page_setup.fit_to_width > 0) {
             oxl_xmlbuf_cstr(b, " fitToWidth=\"");
             oxl_xmlbuf_uint(b, ws->page_setup.fit_to_width);

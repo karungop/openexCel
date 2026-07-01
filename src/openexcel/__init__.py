@@ -10,6 +10,7 @@ from ._openexcel import (
     PageSetup,
     PageMargins,
     PrintOptions,
+    SheetProtection,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "PageSetup",
     "PageMargins",
     "PrintOptions",
+    "SheetProtection",
 ]
