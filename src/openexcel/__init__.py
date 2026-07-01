@@ -11,6 +11,7 @@ from ._openexcel import (
     PageMargins,
     PrintOptions,
     SheetProtection,
+    ConditionalFormattingRule,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "PageMargins",
     "PrintOptions",
     "SheetProtection",
+    "ConditionalFormattingRule",
 ]

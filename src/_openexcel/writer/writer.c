@@ -5,6 +5,7 @@
 #include "sheet_writer.h"
 #include "../cell.h"
 #include "../styles.h"
+#include "../worksheet.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -149,6 +150,22 @@ int oxl_write_workbook(OxlWorkbook *wb, const char *path,
     /* 5. xl/sharedStrings.xml */
     oxl_write_sst(&b, &wb->sst);
     ADD("xl/sharedStrings.xml");
+
+    /* Phase 16: assign dxf_ids for all CF rules that have inline styling */
+    for (uint32_t si = 0; si < wb->sheet_count; si++) {
+        OxlWorksheet *ws2 = wb->sheets[si];
+        for (uint32_t ci = 0; ci < ws2->cf_count; ci++) {
+            OxlCf *cf = &ws2->cond_fmts[ci];
+            for (uint32_t ri = 0; ri < cf->rule_count; ri++) {
+                OxlCfRule *rule = &cf->rules[ri];
+                if (rule->dxf_id >= 0) continue;  /* already assigned (from read) */
+                if (rule->font || rule->fill || rule->border) {
+                    rule->dxf_id = (int32_t)oxl_styles_add_dxf(
+                        &wb->styles, rule->font, rule->fill, rule->border);
+                }
+            }
+        }
+    }
 
     /* 6. xl/styles.xml */
     oxl_styles_init_write_defaults(&wb->styles);
