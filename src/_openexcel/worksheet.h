@@ -48,6 +48,36 @@ typedef struct {
     uint8_t  show_input_message;
 } OxlDataValidation;
 
+/* Phase 14: Page Setup & Print Options */
+
+typedef struct {
+    char    *orientation;   /* "portrait", "landscape"; NULL = not set */
+    uint32_t paper_size;    /* 1=Letter, 9=A4, etc.; 0 = not set */
+    uint32_t scale;         /* 10–400; 0 = not set */
+    uint32_t fit_to_width;  /* pages wide (fit to page mode) */
+    uint32_t fit_to_height; /* pages tall (fit to page mode) */
+    uint8_t  fit_to_page;   /* 0 = scale mode, 1 = fit-to-page mode */
+    uint8_t  has_setup;     /* 1 = at least one field was set */
+} OxlPageSetup;
+
+typedef struct {
+    double   left;
+    double   right;
+    double   top;
+    double   bottom;
+    double   header;
+    double   footer;
+    uint8_t  has_margins;  /* 1 = explicit margins set */
+} OxlPageMargins;
+
+typedef struct {
+    uint8_t  grid_lines;           /* print grid lines */
+    uint8_t  headings;             /* print row/col headings */
+    uint8_t  horizontal_centered;  /* center on page horizontally */
+    uint8_t  vertical_centered;    /* center on page vertically */
+    uint8_t  has_options;          /* 1 = at least one flag set */
+} OxlPrintOptions;
+
 /* ── Worksheet ───────────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -87,6 +117,11 @@ typedef struct {
     OxlDataValidation *data_validations;
     uint32_t           dv_count;
     uint32_t           dv_cap;
+
+    /* Phase 14: Page Setup & Print Options */
+    OxlPageSetup    page_setup;
+    OxlPageMargins  page_margins;
+    OxlPrintOptions print_options;
 } OxlWorksheet;
 
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path);
@@ -108,3 +143,5 @@ int oxl_worksheet_add_merge(OxlWorksheet *ws, uint32_t min_row, uint16_t min_col
 /* Phase 13: Data Validation helpers */
 void oxl_data_validation_free_fields(OxlDataValidation *dv);
 int  oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation *dv);
+
+/* Phase 14: no extra helper functions needed — fields are embedded structs */

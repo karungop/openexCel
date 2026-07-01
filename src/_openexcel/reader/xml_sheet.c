@@ -27,6 +27,10 @@ typedef enum {
     /* Phase 13: data validations */
     SS_DATA_VALIDATIONS,
     SS_DV_FORMULA,       /* inside <formula1> or <formula2>, collects text */
+    /* Phase 14: page setup */
+    SS_PRINT_OPTIONS,      /* inside <printOptions> — attributes only, no children */
+    SS_PAGE_MARGINS,       /* inside <pageMargins> — attributes only */
+    SS_PAGE_SETUP,         /* inside <pageSetup> — attributes only */
 } SheetState;
 
 #define CBUF_STACK 512
@@ -251,6 +255,62 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
         /* Phase 13: data validations block */
         else if (strcmp(name, "dataValidations") == 0) {
             c->state = SS_DATA_VALIDATIONS;
+        }
+        /* Phase 14: print options, page margins, page setup */
+        else if (strcmp(name, "printOptions") == 0) {
+            const char *gl  = attr(attrs, "gridLines");
+            const char *hd  = attr(attrs, "headings");
+            const char *hc  = attr(attrs, "horizontalCentered");
+            const char *vc  = attr(attrs, "verticalCentered");
+            if (gl && (gl[0] == '1' || strcmp(gl, "true") == 0))
+                c->ws->print_options.grid_lines = 1;
+            if (hd && (hd[0] == '1' || strcmp(hd, "true") == 0))
+                c->ws->print_options.headings = 1;
+            if (hc && (hc[0] == '1' || strcmp(hc, "true") == 0))
+                c->ws->print_options.horizontal_centered = 1;
+            if (vc && (vc[0] == '1' || strcmp(vc, "true") == 0))
+                c->ws->print_options.vertical_centered = 1;
+            if (gl || hd || hc || vc)
+                c->ws->print_options.has_options = 1;
+            c->state = SS_PRINT_OPTIONS;
+        }
+        else if (strcmp(name, "pageMargins") == 0) {
+            const char *l = attr(attrs, "left");
+            const char *r = attr(attrs, "right");
+            const char *t = attr(attrs, "top");
+            const char *b = attr(attrs, "bottom");
+            const char *h = attr(attrs, "header");
+            const char *f = attr(attrs, "footer");
+            if (l) c->ws->page_margins.left   = atof(l);
+            if (r) c->ws->page_margins.right  = atof(r);
+            if (t) c->ws->page_margins.top    = atof(t);
+            if (b) c->ws->page_margins.bottom = atof(b);
+            if (h) c->ws->page_margins.header = atof(h);
+            if (f) c->ws->page_margins.footer = atof(f);
+            if (l || r || t || b || h || f)
+                c->ws->page_margins.has_margins = 1;
+            c->state = SS_PAGE_MARGINS;
+        }
+        else if (strcmp(name, "pageSetup") == 0) {
+            const char *orient = attr(attrs, "orientation");
+            const char *ps     = attr(attrs, "paperSize");
+            const char *sc     = attr(attrs, "scale");
+            const char *fw     = attr(attrs, "fitToWidth");
+            const char *fh     = attr(attrs, "fitToHeight");
+            const char *fp     = attr(attrs, "fitToPage");
+            if (orient) {
+                free(c->ws->page_setup.orientation);
+                c->ws->page_setup.orientation = strdup(orient);
+            }
+            if (ps) c->ws->page_setup.paper_size    = (uint32_t)atoi(ps);
+            if (sc) c->ws->page_setup.scale         = (uint32_t)atoi(sc);
+            if (fw) c->ws->page_setup.fit_to_width  = (uint32_t)atoi(fw);
+            if (fh) c->ws->page_setup.fit_to_height = (uint32_t)atoi(fh);
+            if (fp && (fp[0] == '1' || strcmp(fp, "true") == 0))
+                c->ws->page_setup.fit_to_page = 1;
+            if (orient || ps || sc || fw || fh || fp)
+                c->ws->page_setup.has_setup = 1;
+            c->state = SS_PAGE_SETUP;
         }
         break;
 
@@ -483,6 +543,16 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
         oxl_data_validation_free_fields(&c->cur_dv);
         memset(&c->cur_dv, 0, sizeof(c->cur_dv));
     } else if (strcmp(name, "dataValidations") == 0 && c->state == SS_DATA_VALIDATIONS) {
+        c->state = SS_NONE;
+    }
+    /* Phase 14: page setup end — these are self-closing or no-child elements */
+    else if (strcmp(name, "printOptions") == 0 && c->state == SS_PRINT_OPTIONS) {
+        c->state = SS_NONE;
+    }
+    else if (strcmp(name, "pageMargins") == 0 && c->state == SS_PAGE_MARGINS) {
+        c->state = SS_NONE;
+    }
+    else if (strcmp(name, "pageSetup") == 0 && c->state == SS_PAGE_SETUP) {
         c->state = SS_NONE;
     }
 }

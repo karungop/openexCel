@@ -21,6 +21,14 @@ OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path) {
     ws->name = name ? strdup(name) : NULL;
     ws->rel_path = rel_path ? strdup(rel_path) : NULL;
     ws->show_gridlines = 1;  /* Feature C: default show gridlines */
+    /* Phase 14: default page margins (Excel defaults) */
+    ws->page_margins.left   = 0.7;
+    ws->page_margins.right  = 0.7;
+    ws->page_margins.top    = 0.75;
+    ws->page_margins.bottom = 0.75;
+    ws->page_margins.header = 0.3;
+    ws->page_margins.footer = 0.3;
+    /* has_margins stays 0 — only set to 1 when user explicitly sets margins */
     return ws;
 }
 
@@ -45,6 +53,8 @@ void oxl_worksheet_free(OxlWorksheet *ws) {
     for (uint32_t i = 0; i < ws->dv_count; i++)
         oxl_data_validation_free_fields(&ws->data_validations[i]);
     free(ws->data_validations);
+    /* Phase 14: page setup orientation is heap-allocated */
+    free(ws->page_setup.orientation);
     free(ws);
 }
 
