@@ -45,6 +45,11 @@ void oxl_worksheet_free(OxlWorksheet *ws) {
     for (uint32_t i = 0; i < ws->dv_count; i++)
         oxl_data_validation_free_fields(&ws->data_validations[i]);
     free(ws->data_validations);
+    /* Phase 15: sheet protection string fields */
+    free(ws->protection.password_hash);
+    free(ws->protection.algorithm_name);
+    free(ws->protection.hash_value);
+    free(ws->protection.salt_value);
     free(ws);
 }
 

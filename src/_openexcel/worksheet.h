@@ -29,6 +29,33 @@ typedef struct {
     uint16_t max_col;  /* 1-based */
 } OxlMergedCell;
 
+/* Phase 15: Sheet Protection */
+
+typedef struct {
+    char    *password_hash;    /* hashed password (algorithmName+hashValue+saltValue+spinCount attrs); NULL = no password */
+    char    *algorithm_name;   /* e.g. "SHA-512"; NULL if no hash algo */
+    char    *hash_value;       /* base64-encoded hash; NULL if unset */
+    char    *salt_value;       /* base64-encoded salt; NULL if unset */
+    uint32_t spin_count;       /* iteration count; 0 if unset */
+    uint8_t  sheet;            /* 1 = sheet is protected (main flag) */
+    uint8_t  objects;          /* protect objects */
+    uint8_t  scenarios;        /* protect scenarios */
+    uint8_t  format_cells;     /* 1 = formatCells is ALLOWED (inverse of protection attribute) */
+    uint8_t  format_columns;   /* 1 = formatColumns is ALLOWED */
+    uint8_t  format_rows;      /* 1 = formatRows is ALLOWED */
+    uint8_t  insert_columns;   /* 1 = insertColumns is ALLOWED */
+    uint8_t  insert_rows;      /* 1 = insertRows is ALLOWED */
+    uint8_t  insert_hyperlinks;/* 1 = insertHyperlinks is ALLOWED */
+    uint8_t  delete_columns;   /* 1 = deleteColumns is ALLOWED */
+    uint8_t  delete_rows;      /* 1 = deleteRows is ALLOWED */
+    uint8_t  select_locked;    /* 1 = selectLockedCells is ALLOWED */
+    uint8_t  sort;             /* 1 = sort is ALLOWED */
+    uint8_t  auto_filter;      /* 1 = autoFilter is ALLOWED */
+    uint8_t  pivot_tables;     /* 1 = pivotTables is ALLOWED */
+    uint8_t  select_unlocked;  /* 1 = selectUnlockedCells is ALLOWED */
+    uint8_t  has_protection;   /* 1 = <sheetProtection> element present */
+} OxlSheetProtection;
+
 /* Phase 13: Data Validation */
 
 typedef struct {
@@ -87,6 +114,9 @@ typedef struct {
     OxlDataValidation *data_validations;
     uint32_t           dv_count;
     uint32_t           dv_cap;
+
+    /* Phase 15: Sheet Protection */
+    OxlSheetProtection protection;
 } OxlWorksheet;
 
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path);

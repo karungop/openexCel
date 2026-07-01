@@ -27,6 +27,8 @@ typedef enum {
     /* Phase 13: data validations */
     SS_DATA_VALIDATIONS,
     SS_DV_FORMULA,       /* inside <formula1> or <formula2>, collects text */
+    /* Phase 15: sheet protection */
+    SS_SHEET_PROTECTION,   /* inside <sheetProtection> — attributes only */
 } SheetState;
 
 #define CBUF_STACK 512
@@ -251,6 +253,62 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
         /* Phase 13: data validations block */
         else if (strcmp(name, "dataValidations") == 0) {
             c->state = SS_DATA_VALIDATIONS;
+        }
+        /* Phase 15: sheet protection */
+        else if (strcmp(name, "sheetProtection") == 0) {
+            OxlSheetProtection *p = &c->ws->protection;
+            const char *sheet_s  = attr(attrs, "sheet");
+            const char *obj_s    = attr(attrs, "objects");
+            const char *scen_s   = attr(attrs, "scenarios");
+            const char *fc_s     = attr(attrs, "formatCells");
+            const char *fcol_s   = attr(attrs, "formatColumns");
+            const char *fr_s     = attr(attrs, "formatRows");
+            const char *ic_s     = attr(attrs, "insertColumns");
+            const char *ir_s     = attr(attrs, "insertRows");
+            const char *ih_s     = attr(attrs, "insertHyperlinks");
+            const char *dc_s     = attr(attrs, "deleteColumns");
+            const char *dr_s     = attr(attrs, "deleteRows");
+            const char *sl_s     = attr(attrs, "selectLockedCells");
+            const char *sort_s   = attr(attrs, "sort");
+            const char *af_s     = attr(attrs, "autoFilter");
+            const char *pt_s     = attr(attrs, "pivotTables");
+            const char *su_s     = attr(attrs, "selectUnlockedCells");
+            const char *algo_s   = attr(attrs, "algorithmName");
+            const char *hash_s   = attr(attrs, "hashValue");
+            const char *salt_s   = attr(attrs, "saltValue");
+            const char *spin_s   = attr(attrs, "spinCount");
+            const char *pwd_s    = attr(attrs, "password");  /* legacy MD4 hash */
+
+            /* Boolean attribute helper: "1" or "true" = true, absent or "0" = false */
+            #define BOOL_ATTR(s) ((s) && ((s)[0] == '1' || strcmp((s), "true") == 0))
+            p->sheet               = BOOL_ATTR(sheet_s);
+            p->objects             = BOOL_ATTR(obj_s);
+            p->scenarios           = BOOL_ATTR(scen_s);
+            /* Note: formatCells="1" in OOXML means "formatCells is LOCKED" (not allowed).
+               We invert: our field = 1 means "allowed". Default (absent) = not allowed = 0. */
+            p->format_cells        = !BOOL_ATTR(fc_s);
+            p->format_columns      = !BOOL_ATTR(fcol_s);
+            p->format_rows         = !BOOL_ATTR(fr_s);
+            p->insert_columns      = !BOOL_ATTR(ic_s);
+            p->insert_rows         = !BOOL_ATTR(ir_s);
+            p->insert_hyperlinks   = !BOOL_ATTR(ih_s);
+            p->delete_columns      = !BOOL_ATTR(dc_s);
+            p->delete_rows         = !BOOL_ATTR(dr_s);
+            p->select_locked       = !BOOL_ATTR(sl_s);
+            p->sort                = !BOOL_ATTR(sort_s);
+            p->auto_filter         = !BOOL_ATTR(af_s);
+            p->pivot_tables        = !BOOL_ATTR(pt_s);
+            p->select_unlocked     = BOOL_ATTR(su_s);
+            #undef BOOL_ATTR
+
+            if (algo_s) { free(p->algorithm_name); p->algorithm_name = strdup(algo_s); }
+            if (hash_s) { free(p->hash_value);     p->hash_value     = strdup(hash_s); }
+            if (salt_s) { free(p->salt_value);     p->salt_value     = strdup(salt_s); }
+            if (spin_s) p->spin_count = (uint32_t)atoi(spin_s);
+            if (pwd_s)  { free(p->password_hash);  p->password_hash  = strdup(pwd_s); }
+
+            p->has_protection = 1;
+            c->state = SS_SHEET_PROTECTION;
         }
         break;
 
@@ -483,6 +541,9 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
         oxl_data_validation_free_fields(&c->cur_dv);
         memset(&c->cur_dv, 0, sizeof(c->cur_dv));
     } else if (strcmp(name, "dataValidations") == 0 && c->state == SS_DATA_VALIDATIONS) {
+        c->state = SS_NONE;
+    }
+    else if (strcmp(name, "sheetProtection") == 0 && c->state == SS_SHEET_PROTECTION) {
         c->state = SS_NONE;
     }
 }
