@@ -25,6 +25,9 @@ static PyTypeObject PySideType;
 static PyTypeObject PyBorderType;
 static PyTypeObject PyAlignmentType;
 static PyTypeObject PyXlDataValidationType;
+static PyTypeObject PyXlPageSetupType;
+static PyTypeObject PyXlPageMarginsType;
+static PyTypeObject PyXlPrintOptionsType;
 
 /* ========== PyWorkbookObject ========== */
 
@@ -1239,6 +1242,247 @@ static PyTypeObject PyXlDataValidationType = {
     .tp_getset    = dv_getset,
 };
 
+/* ========== Phase 14: PageSetup, PageMargins, PrintOptions types ========== */
+
+/* ---- PyXlPageSetupObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    char *orientation;
+    int   paper_size;
+    int   scale;
+    int   fit_to_width;
+    int   fit_to_height;
+    int   fit_to_page;
+} PyXlPageSetupObject;
+
+static void pagesetup_dealloc(PyXlPageSetupObject *self) {
+    free(self->orientation);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *pagesetup_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyXlPageSetupObject *self = (PyXlPageSetupObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->orientation  = NULL;
+        self->paper_size   = 0;
+        self->scale        = 0;
+        self->fit_to_width = 0;
+        self->fit_to_height = 0;
+        self->fit_to_page  = 0;
+    }
+    return (PyObject *)self;
+}
+
+static int pagesetup_init(PyXlPageSetupObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"orientation", "paper_size", "scale",
+                              "fit_to_width", "fit_to_height", "fit_to_page", NULL};
+    const char *orientation = NULL;
+    int paper_size = 0, scale = 0, fit_to_width = 0, fit_to_height = 0, fit_to_page = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|ziiiii", kwlist,
+                                     &orientation, &paper_size, &scale,
+                                     &fit_to_width, &fit_to_height, &fit_to_page))
+        return -1;
+    free(self->orientation);
+    self->orientation  = orientation ? strdup(orientation) : NULL;
+    self->paper_size   = paper_size;
+    self->scale        = scale;
+    self->fit_to_width = fit_to_width;
+    self->fit_to_height = fit_to_height;
+    self->fit_to_page  = fit_to_page;
+    return 0;
+}
+
+static PyObject *pagesetup_get_orientation(PyXlPageSetupObject *self, void *Py_UNUSED(x)) {
+    if (!self->orientation) Py_RETURN_NONE;
+    return PyUnicode_FromString(self->orientation);
+}
+static PyObject *pagesetup_get_paper_size(PyXlPageSetupObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->paper_size);
+}
+static PyObject *pagesetup_get_scale(PyXlPageSetupObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->scale);
+}
+static PyObject *pagesetup_get_fit_to_width(PyXlPageSetupObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->fit_to_width);
+}
+static PyObject *pagesetup_get_fit_to_height(PyXlPageSetupObject *self, void *Py_UNUSED(x)) {
+    return PyLong_FromLong(self->fit_to_height);
+}
+static PyObject *pagesetup_get_fit_to_page(PyXlPageSetupObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->fit_to_page);
+}
+
+static PyGetSetDef pagesetup_getset[] = {
+    {"orientation",   (getter)pagesetup_get_orientation,   NULL, "Page orientation", NULL},
+    {"paper_size",    (getter)pagesetup_get_paper_size,    NULL, "Paper size code",  NULL},
+    {"scale",         (getter)pagesetup_get_scale,         NULL, "Print scale %",    NULL},
+    {"fit_to_width",  (getter)pagesetup_get_fit_to_width,  NULL, "Fit to width (pages)", NULL},
+    {"fit_to_height", (getter)pagesetup_get_fit_to_height, NULL, "Fit to height (pages)", NULL},
+    {"fit_to_page",   (getter)pagesetup_get_fit_to_page,   NULL, "Fit to page mode", NULL},
+    {NULL}
+};
+
+static PyTypeObject PyXlPageSetupType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "openexcel.PageSetup",
+    .tp_basicsize = sizeof(PyXlPageSetupObject),
+    .tp_dealloc   = (destructor)pagesetup_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = pagesetup_new,
+    .tp_init      = (initproc)pagesetup_init,
+    .tp_getset    = pagesetup_getset,
+};
+
+/* ---- PyXlPageMarginsObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    double left, right, top, bottom, header, footer;
+} PyXlPageMarginsObject;
+
+static PyObject *pagemargins_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyXlPageMarginsObject *self = (PyXlPageMarginsObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->left   = 0.7;
+        self->right  = 0.7;
+        self->top    = 0.75;
+        self->bottom = 0.75;
+        self->header = 0.3;
+        self->footer = 0.3;
+    }
+    return (PyObject *)self;
+}
+
+static int pagemargins_init(PyXlPageMarginsObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"left", "right", "top", "bottom", "header", "footer", NULL};
+    double left = 0.7, right = 0.7, top = 0.75, bottom = 0.75, header = 0.3, footer = 0.3;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|dddddd", kwlist,
+                                     &left, &right, &top, &bottom, &header, &footer))
+        return -1;
+    self->left   = left;
+    self->right  = right;
+    self->top    = top;
+    self->bottom = bottom;
+    self->header = header;
+    self->footer = footer;
+    return 0;
+}
+
+static PyObject *pagemargins_get_left(PyXlPageMarginsObject *self, void *Py_UNUSED(x)) {
+    return PyFloat_FromDouble(self->left);
+}
+static PyObject *pagemargins_get_right(PyXlPageMarginsObject *self, void *Py_UNUSED(x)) {
+    return PyFloat_FromDouble(self->right);
+}
+static PyObject *pagemargins_get_top(PyXlPageMarginsObject *self, void *Py_UNUSED(x)) {
+    return PyFloat_FromDouble(self->top);
+}
+static PyObject *pagemargins_get_bottom(PyXlPageMarginsObject *self, void *Py_UNUSED(x)) {
+    return PyFloat_FromDouble(self->bottom);
+}
+static PyObject *pagemargins_get_header(PyXlPageMarginsObject *self, void *Py_UNUSED(x)) {
+    return PyFloat_FromDouble(self->header);
+}
+static PyObject *pagemargins_get_footer(PyXlPageMarginsObject *self, void *Py_UNUSED(x)) {
+    return PyFloat_FromDouble(self->footer);
+}
+
+static PyGetSetDef pagemargins_getset[] = {
+    {"left",   (getter)pagemargins_get_left,   NULL, "Left margin (inches)",   NULL},
+    {"right",  (getter)pagemargins_get_right,  NULL, "Right margin (inches)",  NULL},
+    {"top",    (getter)pagemargins_get_top,    NULL, "Top margin (inches)",    NULL},
+    {"bottom", (getter)pagemargins_get_bottom, NULL, "Bottom margin (inches)", NULL},
+    {"header", (getter)pagemargins_get_header, NULL, "Header margin (inches)", NULL},
+    {"footer", (getter)pagemargins_get_footer, NULL, "Footer margin (inches)", NULL},
+    {NULL}
+};
+
+static void pagemargins_dealloc(PyXlPageMarginsObject *self) {
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyTypeObject PyXlPageMarginsType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "openexcel.PageMargins",
+    .tp_basicsize = sizeof(PyXlPageMarginsObject),
+    .tp_dealloc   = (destructor)pagemargins_dealloc,
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = pagemargins_new,
+    .tp_init      = (initproc)pagemargins_init,
+    .tp_getset    = pagemargins_getset,
+};
+
+/* ---- PyXlPrintOptionsObject ---- */
+
+typedef struct {
+    PyObject_HEAD
+    int grid_lines;
+    int headings;
+    int horizontal_centered;
+    int vertical_centered;
+} PyXlPrintOptionsObject;
+
+static PyObject *printoptions_new(PyTypeObject *type, PyObject *args, PyObject *kw) {
+    (void)args; (void)kw;
+    PyXlPrintOptionsObject *self = (PyXlPrintOptionsObject *)type->tp_alloc(type, 0);
+    if (self) {
+        self->grid_lines          = 0;
+        self->headings            = 0;
+        self->horizontal_centered = 0;
+        self->vertical_centered   = 0;
+    }
+    return (PyObject *)self;
+}
+
+static int printoptions_init(PyXlPrintOptionsObject *self, PyObject *args, PyObject *kw) {
+    static char *kwlist[] = {"grid_lines", "headings",
+                              "horizontal_centered", "vertical_centered", NULL};
+    int grid_lines = 0, headings = 0, horizontal_centered = 0, vertical_centered = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kw, "|iiii", kwlist,
+                                     &grid_lines, &headings,
+                                     &horizontal_centered, &vertical_centered))
+        return -1;
+    self->grid_lines          = grid_lines;
+    self->headings            = headings;
+    self->horizontal_centered = horizontal_centered;
+    self->vertical_centered   = vertical_centered;
+    return 0;
+}
+
+static PyObject *printoptions_get_grid_lines(PyXlPrintOptionsObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->grid_lines);
+}
+static PyObject *printoptions_get_headings(PyXlPrintOptionsObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->headings);
+}
+static PyObject *printoptions_get_horizontal_centered(PyXlPrintOptionsObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->horizontal_centered);
+}
+static PyObject *printoptions_get_vertical_centered(PyXlPrintOptionsObject *self, void *Py_UNUSED(x)) {
+    return PyBool_FromLong(self->vertical_centered);
+}
+
+static PyGetSetDef printoptions_getset[] = {
+    {"grid_lines",          (getter)printoptions_get_grid_lines,          NULL, "Print gridlines",          NULL},
+    {"headings",            (getter)printoptions_get_headings,            NULL, "Print row/col headings",   NULL},
+    {"horizontal_centered", (getter)printoptions_get_horizontal_centered, NULL, "Center horizontally",      NULL},
+    {"vertical_centered",   (getter)printoptions_get_vertical_centered,   NULL, "Center vertically",        NULL},
+    {NULL}
+};
+
+static PyTypeObject PyXlPrintOptionsType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "openexcel.PrintOptions",
+    .tp_basicsize = sizeof(PyXlPrintOptionsObject),
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_new       = printoptions_new,
+    .tp_init      = (initproc)printoptions_init,
+    .tp_getset    = printoptions_getset,
+};
+
 /* ========== Phase 3: Cell XF context helper ========== */
 
 static void get_cell_xf_context(PyXlCellObject *self,
@@ -2146,6 +2390,98 @@ static PyObject *ws_get_data_validations(PyObject *self, void *closure) {
     return list;
 }
 
+/* ── Phase 14: page_setup, page_margins, print_options getters/setters ───── */
+
+static PyObject *ws_get_page_setup(PyObject *self, void *Py_UNUSED(x)) {
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyXlPageSetupObject *obj = (PyXlPageSetupObject *)PyXlPageSetupType.tp_alloc(&PyXlPageSetupType, 0);
+    if (!obj) return NULL;
+    obj->orientation   = ws->page_setup.orientation ? strdup(ws->page_setup.orientation) : NULL;
+    obj->paper_size    = (int)ws->page_setup.paper_size;
+    obj->scale         = (int)ws->page_setup.scale;
+    obj->fit_to_width  = (int)ws->page_setup.fit_to_width;
+    obj->fit_to_height = (int)ws->page_setup.fit_to_height;
+    obj->fit_to_page   = (int)ws->page_setup.fit_to_page;
+    return (PyObject *)obj;
+}
+
+static int ws_set_page_setup(PyObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) { PyErr_SetString(PyExc_TypeError, "Cannot delete page_setup"); return -1; }
+    if (!PyObject_TypeCheck(value, &PyXlPageSetupType)) {
+        PyErr_SetString(PyExc_TypeError, "page_setup must be a PageSetup object");
+        return -1;
+    }
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyXlPageSetupObject *ps = (PyXlPageSetupObject *)value;
+    free(ws->page_setup.orientation);
+    ws->page_setup.orientation   = ps->orientation ? strdup(ps->orientation) : NULL;
+    ws->page_setup.paper_size    = (uint32_t)ps->paper_size;
+    ws->page_setup.scale         = (uint32_t)ps->scale;
+    ws->page_setup.fit_to_width  = (uint32_t)ps->fit_to_width;
+    ws->page_setup.fit_to_height = (uint32_t)ps->fit_to_height;
+    ws->page_setup.fit_to_page   = (uint8_t)(ps->fit_to_page ? 1 : 0);
+    ws->page_setup.has_setup     = 1;
+    return 0;
+}
+
+static PyObject *ws_get_page_margins(PyObject *self, void *Py_UNUSED(x)) {
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyXlPageMarginsObject *obj = (PyXlPageMarginsObject *)PyXlPageMarginsType.tp_alloc(&PyXlPageMarginsType, 0);
+    if (!obj) return NULL;
+    obj->left   = ws->page_margins.left;
+    obj->right  = ws->page_margins.right;
+    obj->top    = ws->page_margins.top;
+    obj->bottom = ws->page_margins.bottom;
+    obj->header = ws->page_margins.header;
+    obj->footer = ws->page_margins.footer;
+    return (PyObject *)obj;
+}
+
+static int ws_set_page_margins(PyObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) { PyErr_SetString(PyExc_TypeError, "Cannot delete page_margins"); return -1; }
+    if (!PyObject_TypeCheck(value, &PyXlPageMarginsType)) {
+        PyErr_SetString(PyExc_TypeError, "page_margins must be a PageMargins object");
+        return -1;
+    }
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyXlPageMarginsObject *pm = (PyXlPageMarginsObject *)value;
+    ws->page_margins.left   = pm->left;
+    ws->page_margins.right  = pm->right;
+    ws->page_margins.top    = pm->top;
+    ws->page_margins.bottom = pm->bottom;
+    ws->page_margins.header = pm->header;
+    ws->page_margins.footer = pm->footer;
+    ws->page_margins.has_margins = 1;
+    return 0;
+}
+
+static PyObject *ws_get_print_options(PyObject *self, void *Py_UNUSED(x)) {
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyXlPrintOptionsObject *obj = (PyXlPrintOptionsObject *)PyXlPrintOptionsType.tp_alloc(&PyXlPrintOptionsType, 0);
+    if (!obj) return NULL;
+    obj->grid_lines          = ws->print_options.grid_lines;
+    obj->headings            = ws->print_options.headings;
+    obj->horizontal_centered = ws->print_options.horizontal_centered;
+    obj->vertical_centered   = ws->print_options.vertical_centered;
+    return (PyObject *)obj;
+}
+
+static int ws_set_print_options(PyObject *self, PyObject *value, void *Py_UNUSED(x)) {
+    if (!value) { PyErr_SetString(PyExc_TypeError, "Cannot delete print_options"); return -1; }
+    if (!PyObject_TypeCheck(value, &PyXlPrintOptionsType)) {
+        PyErr_SetString(PyExc_TypeError, "print_options must be a PrintOptions object");
+        return -1;
+    }
+    OxlWorksheet *ws = ((PyWorksheetObject *)self)->ws;
+    PyXlPrintOptionsObject *po = (PyXlPrintOptionsObject *)value;
+    ws->print_options.grid_lines          = (uint8_t)(po->grid_lines ? 1 : 0);
+    ws->print_options.headings            = (uint8_t)(po->headings ? 1 : 0);
+    ws->print_options.horizontal_centered = (uint8_t)(po->horizontal_centered ? 1 : 0);
+    ws->print_options.vertical_centered   = (uint8_t)(po->vertical_centered ? 1 : 0);
+    ws->print_options.has_options         = 1;
+    return 0;
+}
+
 static void worksheet_dealloc(PyWorksheetObject *self) {
     Py_XDECREF(self->owner);
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -2175,6 +2511,9 @@ static PyGetSetDef worksheet_getset[] = {
     {"tab_color",       (getter)worksheet_get_tab_color,       (setter)worksheet_set_tab_color,       "Tab color hex",      NULL},
     {"auto_filter_ref",   (getter)worksheet_get_auto_filter_ref, (setter)worksheet_set_auto_filter_ref, "Auto-filter range",  NULL},
     {"data_validations",  (getter)ws_get_data_validations,       NULL,                                  "Data validations",   NULL},
+    {"page_setup",        (getter)ws_get_page_setup,             (setter)ws_set_page_setup,             "Page setup",         NULL},
+    {"page_margins",      (getter)ws_get_page_margins,           (setter)ws_set_page_margins,           "Page margins",       NULL},
+    {"print_options",     (getter)ws_get_print_options,          (setter)ws_set_print_options,          "Print options",      NULL},
     {NULL}
 };
 
@@ -2433,6 +2772,9 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     if (PyType_Ready(&PyBorderType) < 0)      return NULL;
     if (PyType_Ready(&PyAlignmentType) < 0)          return NULL;
     if (PyType_Ready(&PyXlDataValidationType) < 0)   return NULL;
+    if (PyType_Ready(&PyXlPageSetupType) < 0)        return NULL;
+    if (PyType_Ready(&PyXlPageMarginsType) < 0)      return NULL;
+    if (PyType_Ready(&PyXlPrintOptionsType) < 0)     return NULL;
 
     PyObject *mod = PyModule_Create(&moduledef);
     if (!mod) return NULL;
@@ -2479,6 +2821,21 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     Py_INCREF(&PyXlDataValidationType);
     if (PyModule_AddObject(mod, "DataValidation", (PyObject *)&PyXlDataValidationType) < 0) {
         Py_DECREF(&PyXlDataValidationType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyXlPageSetupType);
+    if (PyModule_AddObject(mod, "PageSetup", (PyObject *)&PyXlPageSetupType) < 0) {
+        Py_DECREF(&PyXlPageSetupType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyXlPageMarginsType);
+    if (PyModule_AddObject(mod, "PageMargins", (PyObject *)&PyXlPageMarginsType) < 0) {
+        Py_DECREF(&PyXlPageMarginsType); Py_DECREF(mod); return NULL;
+    }
+
+    Py_INCREF(&PyXlPrintOptionsType);
+    if (PyModule_AddObject(mod, "PrintOptions", (PyObject *)&PyXlPrintOptionsType) < 0) {
+        Py_DECREF(&PyXlPrintOptionsType); Py_DECREF(mod); return NULL;
     }
 
     return mod;

@@ -325,5 +325,70 @@ void oxl_write_sheet(OxlXmlBuf *b, const OxlWorksheet *ws, const OxlWorkbook *wb
         }
     }
 
+    /* Phase 14: <printOptions> */
+    if (ws->print_options.has_options) {
+        oxl_xmlbuf_cstr(b, "<printOptions");
+        if (ws->print_options.grid_lines)
+            oxl_xmlbuf_cstr(b, " gridLines=\"1\"");
+        if (ws->print_options.headings)
+            oxl_xmlbuf_cstr(b, " headings=\"1\"");
+        if (ws->print_options.horizontal_centered)
+            oxl_xmlbuf_cstr(b, " horizontalCentered=\"1\"");
+        if (ws->print_options.vertical_centered)
+            oxl_xmlbuf_cstr(b, " verticalCentered=\"1\"");
+        oxl_xmlbuf_cstr(b, "/>");
+    }
+
+    /* Phase 14: <pageMargins> — always emit (Excel requires it for printing) */
+    if (ws->page_margins.has_margins) {
+        oxl_xmlbuf_cstr(b, "<pageMargins left=\"");
+        oxl_xmlbuf_double(b, ws->page_margins.left);
+        oxl_xmlbuf_cstr(b, "\" right=\"");
+        oxl_xmlbuf_double(b, ws->page_margins.right);
+        oxl_xmlbuf_cstr(b, "\" top=\"");
+        oxl_xmlbuf_double(b, ws->page_margins.top);
+        oxl_xmlbuf_cstr(b, "\" bottom=\"");
+        oxl_xmlbuf_double(b, ws->page_margins.bottom);
+        oxl_xmlbuf_cstr(b, "\" header=\"");
+        oxl_xmlbuf_double(b, ws->page_margins.header);
+        oxl_xmlbuf_cstr(b, "\" footer=\"");
+        oxl_xmlbuf_double(b, ws->page_margins.footer);
+        oxl_xmlbuf_cstr(b, "\"/>");
+    }
+
+    /* Phase 14: <pageSetup> */
+    if (ws->page_setup.has_setup) {
+        oxl_xmlbuf_cstr(b, "<pageSetup");
+        if (ws->page_setup.paper_size > 0) {
+            oxl_xmlbuf_cstr(b, " paperSize=\"");
+            oxl_xmlbuf_uint(b, ws->page_setup.paper_size);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (ws->page_setup.orientation) {
+            oxl_xmlbuf_cstr(b, " orientation=\"");
+            oxl_xmlbuf_text(b, ws->page_setup.orientation);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (ws->page_setup.scale > 0) {
+            oxl_xmlbuf_cstr(b, " scale=\"");
+            oxl_xmlbuf_uint(b, ws->page_setup.scale);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (ws->page_setup.fit_to_page) {
+            oxl_xmlbuf_cstr(b, " fitToPage=\"1\"");
+        }
+        if (ws->page_setup.fit_to_width > 0) {
+            oxl_xmlbuf_cstr(b, " fitToWidth=\"");
+            oxl_xmlbuf_uint(b, ws->page_setup.fit_to_width);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        if (ws->page_setup.fit_to_height > 0) {
+            oxl_xmlbuf_cstr(b, " fitToHeight=\"");
+            oxl_xmlbuf_uint(b, ws->page_setup.fit_to_height);
+            oxl_xmlbuf_raw(b, "\"", 1);
+        }
+        oxl_xmlbuf_cstr(b, "/>");
+    }
+
     oxl_xmlbuf_cstr(b, "</worksheet>");
 }
