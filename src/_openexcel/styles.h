@@ -55,6 +55,13 @@ typedef struct {
     uint8_t      apply_alignment;
 } OxlXfRecord;
 
+/* Phase 16: Differential format record (used by conditional formatting rules) */
+typedef struct {
+    OxlFontDef  *font;    /* NULL = no font override */
+    OxlFillDef  *fill;    /* NULL = no fill override */
+    OxlBorderDef *border; /* NULL = no border override */
+} OxlDxf;
+
 typedef struct {
     /* Read-side date detection */
     uint8_t  *date_xf_bits;
@@ -87,6 +94,11 @@ typedef struct {
     OxlBorderDef *borders;
     uint32_t      border_count;
     uint32_t      border_cap;
+
+    /* Phase 16: DXF (differential format) registry */
+    OxlDxf   *dxfs;
+    uint32_t  dxf_count;
+    uint32_t  dxf_cap;
 } OxlStyles;
 
 void oxl_styles_init(OxlStyles *s);
@@ -150,6 +162,11 @@ uint32_t oxl_styles_get_or_add_border(OxlStyles *s, const OxlBorderDef *border);
 uint16_t oxl_styles_get_or_add_xf_full(OxlStyles *s, const char *fmt_str,
                                          uint32_t font_id, uint32_t fill_id,
                                          uint32_t border_id, const OxlAlignDef *align);
+
+/* Phase 16: DXF management */
+uint32_t      oxl_styles_add_dxf(OxlStyles *s, const OxlFontDef *font,
+                                   const OxlFillDef *fill, const OxlBorderDef *border);
+const OxlDxf *oxl_styles_get_dxf(const OxlStyles *s, uint32_t dxf_id);
 
 /* Free heap-owned fields (but not the struct itself) */
 void oxl_font_def_free_fields(OxlFontDef *f);

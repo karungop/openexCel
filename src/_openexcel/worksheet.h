@@ -1,5 +1,6 @@
 #pragma once
 #include "cell.h"
+#include "styles.h"
 #include <stdint.h>
 
 /* ── Feature A: Column & Row Dimensions ─────────────────────────────────── */
@@ -80,7 +81,7 @@ typedef struct {
 typedef struct {
     char    *orientation;   /* "portrait", "landscape"; NULL = not set */
     uint32_t paper_size;    /* 1=Letter, 9=A4, etc.; 0 = not set */
-    uint32_t scale;         /* 10–400; 0 = not set */
+    uint32_t scale;         /* 10-400; 0 = not set */
     uint32_t fit_to_width;  /* pages wide (fit to page mode) */
     uint32_t fit_to_height; /* pages tall (fit to page mode) */
     uint8_t  fit_to_page;   /* 0 = scale mode, 1 = fit-to-page mode */
@@ -104,6 +105,53 @@ typedef struct {
     uint8_t  vertical_centered;    /* center on page vertically */
     uint8_t  has_options;          /* 1 = at least one flag set */
 } OxlPrintOptions;
+
+/* ── Phase 16: Conditional Formatting ───────────────────────────────────── */
+
+/* Color value object used by colorScale and dataBar rules */
+typedef struct {
+    char    *type;    /* "min","max","num","percent","percentile","formula" */
+    char    *val;     /* threshold value string; NULL for min/max */
+    uint32_t rgb;     /* ARGB color, e.g. 0xFFFF0000 */
+    uint8_t  has_rgb;
+} OxlCfvo;
+
+typedef struct {
+    char    *type;          /* "cellIs","expression","colorScale","dataBar","top10",
+                               "aboveAverage","containsText","notContainsText",
+                               "beginsWith","endsWith","duplicateValues","uniqueValues" */
+    char    *operator_;     /* for cellIs: "greaterThan","lessThan","between", etc. */
+    char    *formula;       /* formula1 / threshold */
+    char    *formula2;      /* formula2 for between/notBetween */
+    char    *text;          /* for text-based rules (containsText etc.) */
+    int32_t  priority;      /* 1 = highest; auto-assigned if <= 0 */
+    uint8_t  stop_if_true;
+    /* DXF styling — populated from Python or by reading DXF from file */
+    OxlFontDef  *font;      /* NULL if no font override */
+    OxlFillDef  *fill;      /* NULL if no fill override */
+    OxlBorderDef *border;   /* NULL if no border override */
+    int32_t  dxf_id;        /* index into wb->styles.dxfs[]; -1 = none/unset */
+    /* top10 */
+    uint8_t  top10_top;     /* 1 = top, 0 = bottom */
+    uint8_t  top10_percent; /* 1 = percent rank, 0 = count */
+    uint32_t top10_rank;    /* N (count or percent value) */
+    /* aboveAverage */
+    uint8_t  above_avg;     /* 1 = above, 0 = below */
+    uint8_t  equal_avg;     /* 1 = include equal to average */
+    /* colorScale / dataBar */
+    OxlCfvo  cfvos[3];      /* 2 or 3 value objects */
+    uint32_t cfvo_count;
+    uint32_t colors[3];     /* ARGB colors parallel to cfvos */
+    uint32_t color_count;
+    uint8_t  data_bar_show_value; /* 1 = show cell value in dataBar */
+} OxlCfRule;
+
+typedef struct {
+    char      *sqref;      /* e.g. "A1:A10" */
+    OxlCfRule *rules;
+    uint32_t   rule_count;
+    uint32_t   rule_cap;
+} OxlCf;
 
 /* ── Worksheet ───────────────────────────────────────────────────────────── */
 
@@ -152,6 +200,11 @@ typedef struct {
 
     /* Phase 15: Sheet Protection */
     OxlSheetProtection protection;
+
+    /* Phase 16: Conditional Formatting */
+    OxlCf    *cond_fmts;
+    uint32_t  cf_count;
+    uint32_t  cf_cap;
 } OxlWorksheet;
 
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path);
@@ -175,3 +228,8 @@ void oxl_data_validation_free_fields(OxlDataValidation *dv);
 int  oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation *dv);
 
 /* Phase 14: no extra helper functions needed — fields are embedded structs */
+
+/* Phase 16: Conditional Formatting helpers */
+void oxl_cfvo_free_fields(OxlCfvo *v);
+void oxl_cf_rule_free_fields(OxlCfRule *rule);
+int  oxl_worksheet_add_cf_rule(OxlWorksheet *ws, const char *sqref, const OxlCfRule *rule);
