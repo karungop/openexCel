@@ -57,49 +57,6 @@ typedef struct {
     uint8_t  has_protection;
 } OxlSheetProtection;
 
-/* Phase 16: Conditional Formatting */
-
-typedef struct {
-    char    *type;    /* "min","max","num","percent","percentile","formula" */
-    char    *val;     /* threshold value string; NULL for min/max */
-    uint32_t rgb;     /* ARGB color */
-    uint8_t  has_rgb;
-} OxlCfvo;
-
-typedef struct {
-    char    *type;       /* "cellIs","expression","colorScale","dataBar","top10","aboveAverage",
-                            "containsText","notContainsText","beginsWith","endsWith",
-                            "duplicateValues","uniqueValues" */
-    char    *operator_;  /* for cellIs: "greaterThan","lessThan","equal","notEqual","between","notBetween",
-                            "greaterThanOrEqual","lessThanOrEqual" */
-    char    *formula;    /* formula1 / threshold */
-    char    *formula2;   /* for between/notBetween */
-    char    *text;       /* for text-based rules */
-    int32_t  priority;   /* 1 = highest */
-    uint8_t  stop_if_true;
-    OxlFontDef  *font;   /* NULL if no font override */
-    OxlFillDef  *fill;   /* NULL if no fill override */
-    OxlBorderDef *border;/* NULL if no border override */
-    int32_t  dxf_id;     /* -1 = unset */
-    uint8_t  top10_top;
-    uint8_t  top10_percent;
-    uint32_t top10_rank;
-    uint8_t  above_avg;
-    uint8_t  equal_avg;
-    OxlCfvo  cfvos[3];
-    uint32_t cfvo_count;
-    uint32_t colors[3];  /* ARGB */
-    uint32_t color_count;
-    uint8_t  data_bar_show_value;
-} OxlCfRule;
-
-typedef struct {
-    char      *sqref;
-    OxlCfRule *rules;
-    uint32_t   rule_count;
-    uint32_t   rule_cap;
-} OxlCf;
-
 /* Phase 13: Data Validation */
 
 typedef struct {
@@ -114,7 +71,7 @@ typedef struct {
     char    *prompt_message;
     char    *prompt_title;
     uint8_t  allow_blank;
-    uint8_t  show_drop_down;       /* 1 = hide dropdown (XML attr "showDropDown"="1" means hidden) */
+    uint8_t  show_drop_down;
     uint8_t  show_error_message;
     uint8_t  show_input_message;
 } OxlDataValidation;
@@ -151,7 +108,6 @@ typedef struct {
 
 /* ── Phase 16: Conditional Formatting ───────────────────────────────────── */
 
-/* Color value object used by colorScale and dataBar rules */
 typedef struct {
     char    *type;    /* "min","max","num","percent","percentile","formula" */
     char    *val;     /* threshold value string; NULL for min/max */
@@ -169,24 +125,20 @@ typedef struct {
     char    *text;          /* for text-based rules (containsText etc.) */
     int32_t  priority;      /* 1 = highest; auto-assigned if <= 0 */
     uint8_t  stop_if_true;
-    /* DXF styling — populated from Python or by reading DXF from file */
     OxlFontDef  *font;      /* NULL if no font override */
     OxlFillDef  *fill;      /* NULL if no fill override */
     OxlBorderDef *border;   /* NULL if no border override */
     int32_t  dxf_id;        /* index into wb->styles.dxfs[]; -1 = none/unset */
-    /* top10 */
     uint8_t  top10_top;     /* 1 = top, 0 = bottom */
     uint8_t  top10_percent; /* 1 = percent rank, 0 = count */
     uint32_t top10_rank;    /* N (count or percent value) */
-    /* aboveAverage */
     uint8_t  above_avg;     /* 1 = above, 0 = below */
     uint8_t  equal_avg;     /* 1 = include equal to average */
-    /* colorScale / dataBar */
     OxlCfvo  cfvos[3];      /* 2 or 3 value objects */
     uint32_t cfvo_count;
     uint32_t colors[3];     /* ARGB colors parallel to cfvos */
     uint32_t color_count;
-    uint8_t  data_bar_show_value; /* 1 = show cell value in dataBar */
+    uint8_t  data_bar_show_value;
 } OxlCfRule;
 
 typedef struct {
@@ -199,13 +151,13 @@ typedef struct {
 /* ── Worksheet ───────────────────────────────────────────────────────────── */
 
 typedef struct {
-    char    *name;              /* sheet display name (UTF-8, owned) */
-    char    *rel_path;          /* ZIP entry path, e.g. "xl/worksheets/sheet1.xml" */
-    OxlCell *cells;             /* flat array, document/row-major order */
+    char    *name;
+    char    *rel_path;
+    OxlCell *cells;
     uint32_t cell_count;
     uint32_t cell_capacity;
-    uint32_t row_count;         /* max row index seen + 1 */
-    uint32_t col_count;         /* max col index seen + 1 */
+    uint32_t row_count;
+    uint32_t col_count;
 
     /* Feature A */
     OxlColDim  *col_dims;
@@ -220,31 +172,31 @@ typedef struct {
     uint32_t       merged_cell_count;
     uint32_t       merged_cell_capacity;
 
-    /* Feature C: Sheet Views / Freeze Panes */
-    char    *freeze_panes;    /* e.g. "B2"; NULL if none (heap-allocated) */
-    int      zoom_scale;      /* 0 = default (100%) */
-    int      show_gridlines;  /* 1 = show (default), 0 = hide */
+    /* Feature C */
+    char    *freeze_panes;
+    int      zoom_scale;
+    int      show_gridlines;
 
-    /* Feature D: Tab Color */
-    char tab_color[9];        /* AARRGGBB or RRGGBB hex, empty string if none */
+    /* Feature D */
+    char tab_color[9];
 
-    /* Feature E: Auto-Filter */
-    char *auto_filter_ref;    /* e.g. "A1:D1"; NULL if none (heap-allocated) */
+    /* Feature E */
+    char *auto_filter_ref;
 
-    /* Phase 13: Data Validations */
+    /* Phase 13 */
     OxlDataValidation *data_validations;
     uint32_t           dv_count;
     uint32_t           dv_cap;
 
-    /* Phase 14: Page Setup & Print Options */
+    /* Phase 14 */
     OxlPageSetup    page_setup;
     OxlPageMargins  page_margins;
     OxlPrintOptions print_options;
 
-    /* Phase 15: Sheet Protection */
+    /* Phase 15 */
     OxlSheetProtection protection;
 
-    /* Phase 16: Conditional Formatting */
+    /* Phase 16 */
     OxlCf    *cond_fmts;
     uint32_t  cf_count;
     uint32_t  cf_cap;
@@ -253,31 +205,23 @@ typedef struct {
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path);
 void          oxl_worksheet_free(OxlWorksheet *ws);
 
-/* Append a cell (copied by value). Caller must have already set all fields. */
 int           oxl_worksheet_append_cell(OxlWorksheet *ws, OxlCell *c);
 
-/* Feature A helpers */
+/* Feature A */
 int oxl_worksheet_set_col_dim(OxlWorksheet *ws, uint16_t col_min, uint16_t col_max,
                                double width, int hidden, int best_fit, int custom_width);
 int oxl_worksheet_set_row_dim(OxlWorksheet *ws, uint32_t row_idx, double height,
                                int hidden, int custom_height);
 
-/* Feature B helper */
+/* Feature B */
 int oxl_worksheet_add_merge(OxlWorksheet *ws, uint32_t min_row, uint16_t min_col,
                              uint32_t max_row, uint16_t max_col);
 
-/* Phase 13: Data Validation helpers */
+/* Phase 13 */
 void oxl_data_validation_free_fields(OxlDataValidation *dv);
 int  oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation *dv);
 
-/* Phase 16: Conditional Formatting helpers */
-void oxl_cfvo_free_fields(OxlCfvo *v);
-void oxl_cf_rule_free_fields(OxlCfRule *rule);
-int  oxl_worksheet_add_cf_rule(OxlWorksheet *ws, const char *sqref, const OxlCfRule *rule);
-
-/* Phase 14: no extra helper functions needed — fields are embedded structs */
-
-/* Phase 16: Conditional Formatting helpers */
+/* Phase 16 */
 void oxl_cfvo_free_fields(OxlCfvo *v);
 void oxl_cf_rule_free_fields(OxlCfRule *rule);
 int  oxl_worksheet_add_cf_rule(OxlWorksheet *ws, const char *sqref, const OxlCfRule *rule);
