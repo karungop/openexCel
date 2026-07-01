@@ -120,6 +120,9 @@ void oxl_styles_init(OxlStyles *s) {
     s->borders = NULL;
     s->border_count = 0;
     s->border_cap = 0;
+    s->dxfs = NULL;
+    s->dxf_count = 0;
+    s->dxf_cap = 0;
 }
 
 void oxl_styles_free(OxlStyles *s) {
@@ -175,6 +178,19 @@ void oxl_styles_free(OxlStyles *s) {
     }
     s->border_count = 0;
     s->border_cap = 0;
+
+    if (s->dxfs) {
+        for (uint32_t i = 0; i < s->dxf_count; i++) {
+            OxlDxf *dxf = &s->dxfs[i];
+            if (dxf->font) { oxl_font_def_free_fields(dxf->font); free(dxf->font); dxf->font = NULL; }
+            if (dxf->fill) { oxl_fill_def_free_fields(dxf->fill); free(dxf->fill); dxf->fill = NULL; }
+            if (dxf->border) { oxl_border_def_free_fields(dxf->border); free(dxf->border); dxf->border = NULL; }
+        }
+        free(s->dxfs);
+        s->dxfs = NULL;
+    }
+    s->dxf_count = 0;
+    s->dxf_cap = 0;
 
     s->xf_count = 0;
 }
@@ -385,6 +401,61 @@ uint32_t oxl_styles_get_or_add_border(OxlStyles *s, const OxlBorderDef *border) 
         return i;
     }
     return oxl_styles_add_border(s, border);
+}
+
+/* ---- DXF (differential format) registry — Phase 16 ---- */
+
+static OxlFontDef *dup_font(const OxlFontDef *src) {
+    if (!src) return NULL;
+    OxlFontDef *d = malloc(sizeof(*d));
+    if (!d) return NULL;
+    *d = *src;
+    d->name = src->name ? strdup(src->name) : NULL;
+    return d;
+}
+
+static OxlFillDef *dup_fill(const OxlFillDef *src) {
+    if (!src) return NULL;
+    OxlFillDef *d = malloc(sizeof(*d));
+    if (!d) return NULL;
+    *d = *src;
+    d->pattern_type = src->pattern_type ? strdup(src->pattern_type) : NULL;
+    return d;
+}
+
+static OxlBorderDef *dup_border(const OxlBorderDef *src) {
+    if (!src) return NULL;
+    OxlBorderDef *d = malloc(sizeof(*d));
+    if (!d) return NULL;
+    d->left     = copy_border_side(&src->left);
+    d->right    = copy_border_side(&src->right);
+    d->top      = copy_border_side(&src->top);
+    d->bottom   = copy_border_side(&src->bottom);
+    d->diagonal = copy_border_side(&src->diagonal);
+    d->diagonal_up   = src->diagonal_up;
+    d->diagonal_down = src->diagonal_down;
+    return d;
+}
+
+uint32_t oxl_styles_add_dxf(OxlStyles *s, const OxlFontDef *font,
+                              const OxlFillDef *fill, const OxlBorderDef *border) {
+    if (s->dxf_count >= s->dxf_cap) {
+        uint32_t new_cap = s->dxf_cap ? s->dxf_cap * 2 : 8;
+        OxlDxf *p = realloc(s->dxfs, new_cap * sizeof(OxlDxf));
+        if (!p) return 0;
+        s->dxfs = p;
+        s->dxf_cap = new_cap;
+    }
+    OxlDxf *dst = &s->dxfs[s->dxf_count];
+    dst->font   = dup_font(font);
+    dst->fill   = dup_fill(fill);
+    dst->border = dup_border(border);
+    return s->dxf_count++;
+}
+
+const OxlDxf *oxl_styles_get_dxf(const OxlStyles *s, uint32_t dxf_id) {
+    if (!s->dxfs || dxf_id >= s->dxf_count) return NULL;
+    return &s->dxfs[dxf_id];
 }
 
 /* ---- XF registry accessors ---- */
@@ -886,5 +957,83 @@ void oxl_write_styles(OxlXmlBuf *b, const OxlStyles *s) {
             oxl_xmlbuf_cstr(b, "/>");
         }
     }
-    oxl_xmlbuf_cstr(b, "</cellXfs></styleSheet>");
+    oxl_xmlbuf_cstr(b, "</cellXfs>");
+
+    /* Phase 16: <dxfs> */
+    if (s->dxf_count > 0) {
+        oxl_xmlbuf_cstr(b, "<dxfs count=\"");
+        oxl_xmlbuf_uint(b, s->dxf_count);
+        oxl_xmlbuf_cstr(b, "\">");
+        for (uint32_t i = 0; i < s->dxf_count; i++) {
+            const OxlDxf *dxf = &s->dxfs[i];
+            int has_content = (dxf->font != NULL) || (dxf->fill != NULL) || (dxf->border != NULL);
+            if (!has_content) {
+                oxl_xmlbuf_cstr(b, "<dxf/>");
+                continue;
+            }
+            oxl_xmlbuf_cstr(b, "<dxf>");
+            /* font */
+            if (dxf->font) {
+                const OxlFontDef *f = dxf->font;
+                oxl_xmlbuf_cstr(b, "<font>");
+                if (f->bold)   oxl_xmlbuf_cstr(b, "<b/>");
+                if (f->italic) oxl_xmlbuf_cstr(b, "<i/>");
+                if (f->underline == 1) oxl_xmlbuf_cstr(b, "<u val=\"single\"/>");
+                else if (f->underline == 2) oxl_xmlbuf_cstr(b, "<u val=\"double\"/>");
+                if (f->size > 0) {
+                    char szstr[32];
+                    if (f->size == (float)(int)f->size)
+                        snprintf(szstr, sizeof(szstr), "%d", (int)f->size);
+                    else
+                        snprintf(szstr, sizeof(szstr), "%.2f", f->size);
+                    oxl_xmlbuf_cstr(b, "<sz val=\"");
+                    oxl_xmlbuf_cstr(b, szstr);
+                    oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                if (f->name) {
+                    oxl_xmlbuf_cstr(b, "<name val=\"");
+                    oxl_xmlbuf_attr_val(b, f->name);
+                    oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                if (f->color_rgb != 0) {
+                    oxl_xmlbuf_cstr(b, "<color rgb=\"");
+                    write_argb_color(b, f->color_rgb);
+                    oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                oxl_xmlbuf_cstr(b, "</font>");
+            }
+            /* fill */
+            if (dxf->fill) {
+                const OxlFillDef *f = dxf->fill;
+                oxl_xmlbuf_cstr(b, "<fill><patternFill");
+                if (f->pattern_type && f->pattern_type[0]) {
+                    oxl_xmlbuf_cstr(b, " patternType=\"");
+                    oxl_xmlbuf_cstr(b, f->pattern_type);
+                    oxl_xmlbuf_cstr(b, "\">");
+                } else {
+                    oxl_xmlbuf_cstr(b, " patternType=\"solid\">");
+                }
+                if (f->fg_has_color) {
+                    oxl_xmlbuf_cstr(b, "<fgColor rgb=\"");
+                    write_argb_color(b, f->fg_rgb);
+                    oxl_xmlbuf_cstr(b, "\"/>");
+                }
+                oxl_xmlbuf_cstr(b, "</patternFill></fill>");
+            }
+            /* border */
+            if (dxf->border) {
+                const OxlBorderDef *bd = dxf->border;
+                oxl_xmlbuf_cstr(b, "<border>");
+                write_border_side(b, "left",   &bd->left);
+                write_border_side(b, "right",  &bd->right);
+                write_border_side(b, "top",    &bd->top);
+                write_border_side(b, "bottom", &bd->bottom);
+                oxl_xmlbuf_cstr(b, "</border>");
+            }
+            oxl_xmlbuf_cstr(b, "</dxf>");
+        }
+        oxl_xmlbuf_cstr(b, "</dxfs>");
+    }
+
+    oxl_xmlbuf_cstr(b, "</styleSheet>");
 }

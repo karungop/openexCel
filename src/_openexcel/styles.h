@@ -153,6 +153,11 @@ void oxl_styles_set_xf_full(OxlStyles *s, uint32_t xf_index,
                               uint32_t font_id, uint32_t fill_id,
                               uint32_t border_id, const OxlAlignDef *align);
 
+/* Phase 16: DXF management */
+uint32_t      oxl_styles_add_dxf(OxlStyles *s, const OxlFontDef *font,
+                                   const OxlFillDef *fill, const OxlBorderDef *border);
+const OxlDxf *oxl_styles_get_dxf(const OxlStyles *s, uint32_t dxf_id);
+
 /* Write-side: find-or-create font/fill/border with dedup */
 uint32_t oxl_styles_get_or_add_font(OxlStyles *s, const OxlFontDef *font);
 uint32_t oxl_styles_get_or_add_fill(OxlStyles *s, const OxlFillDef *fill);

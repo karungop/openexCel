@@ -1,4 +1,5 @@
 #include "worksheet.h"
+#include "styles.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,6 +14,26 @@ void oxl_data_validation_free_fields(OxlDataValidation *dv) {
     free(dv->error_style);
     free(dv->prompt_message);
     free(dv->prompt_title);
+}
+
+void oxl_cfvo_free_fields(OxlCfvo *v) {
+    free(v->type);
+    free(v->val);
+    v->type = NULL;
+    v->val  = NULL;
+}
+
+void oxl_cf_rule_free_fields(OxlCfRule *rule) {
+    free(rule->type);
+    free(rule->operator_);
+    free(rule->formula);
+    free(rule->formula2);
+    free(rule->text);
+    for (uint32_t i = 0; i < rule->cfvo_count; i++)
+        oxl_cfvo_free_fields(&rule->cfvos[i]);
+    if (rule->font)   { oxl_font_def_free_fields(rule->font);   free(rule->font);   rule->font   = NULL; }
+    if (rule->fill)   { oxl_fill_def_free_fields(rule->fill);   free(rule->fill);   rule->fill   = NULL; }
+    if (rule->border) { oxl_border_def_free_fields(rule->border); free(rule->border); rule->border = NULL; }
 }
 
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path) {
@@ -60,6 +81,15 @@ void oxl_worksheet_free(OxlWorksheet *ws) {
     free(ws->protection.algorithm_name);
     free(ws->protection.hash_value);
     free(ws->protection.salt_value);
+    /* Phase 16: conditional formatting */
+    for (uint32_t i = 0; i < ws->cf_count; i++) {
+        OxlCf *cf = &ws->cond_fmts[i];
+        free(cf->sqref);
+        for (uint32_t j = 0; j < cf->rule_count; j++)
+            oxl_cf_rule_free_fields(&cf->rules[j]);
+        free(cf->rules);
+    }
+    free(ws->cond_fmts);
     free(ws);
 }
 
@@ -155,6 +185,104 @@ int oxl_worksheet_add_merge(OxlWorksheet *ws, uint32_t min_row, uint16_t min_col
     m->min_col = min_col;
     m->max_row = max_row;
     m->max_col = max_col;
+    return 0;
+}
+
+/* ── Phase 16: Conditional Formatting ───────────────────────────────────── */
+
+int oxl_worksheet_add_cf_rule(OxlWorksheet *ws, const char *sqref, const OxlCfRule *rule) {
+    /* Find or create OxlCf for this sqref */
+    OxlCf *cf = NULL;
+    for (uint32_t i = 0; i < ws->cf_count; i++) {
+        if (ws->cond_fmts[i].sqref && sqref &&
+            strcmp(ws->cond_fmts[i].sqref, sqref) == 0) {
+            cf = &ws->cond_fmts[i];
+            break;
+        }
+    }
+    if (!cf) {
+        if (ws->cf_count == ws->cf_cap) {
+            uint32_t cap = ws->cf_cap ? ws->cf_cap * 2 : 4;
+            OxlCf *p = realloc(ws->cond_fmts, cap * sizeof(OxlCf));
+            if (!p) return -1;
+            ws->cond_fmts = p;
+            ws->cf_cap    = cap;
+        }
+        cf = &ws->cond_fmts[ws->cf_count++];
+        memset(cf, 0, sizeof(*cf));
+        cf->sqref = sqref ? strdup(sqref) : NULL;
+    }
+    /* Append rule */
+    if (cf->rule_count == cf->rule_cap) {
+        uint32_t cap = cf->rule_cap ? cf->rule_cap * 2 : 4;
+        OxlCfRule *p = realloc(cf->rules, cap * sizeof(OxlCfRule));
+        if (!p) return -1;
+        cf->rules    = p;
+        cf->rule_cap = cap;
+    }
+    OxlCfRule *dst = &cf->rules[cf->rule_count++];
+    memset(dst, 0, sizeof(*dst));
+    dst->type       = rule->type       ? strdup(rule->type)       : NULL;
+    dst->operator_  = rule->operator_  ? strdup(rule->operator_)  : NULL;
+    dst->formula    = rule->formula    ? strdup(rule->formula)    : NULL;
+    dst->formula2   = rule->formula2   ? strdup(rule->formula2)   : NULL;
+    dst->text       = rule->text       ? strdup(rule->text)       : NULL;
+    dst->priority   = rule->priority;
+    dst->stop_if_true = rule->stop_if_true;
+    dst->dxf_id     = rule->dxf_id;
+    dst->top10_top  = rule->top10_top;
+    dst->top10_percent = rule->top10_percent;
+    dst->top10_rank = rule->top10_rank;
+    dst->above_avg  = rule->above_avg;
+    dst->equal_avg  = rule->equal_avg;
+    dst->cfvo_count = rule->cfvo_count;
+    dst->color_count = rule->color_count;
+    dst->data_bar_show_value = rule->data_bar_show_value;
+    for (uint32_t i = 0; i < rule->cfvo_count; i++) {
+        dst->cfvos[i].type    = rule->cfvos[i].type ? strdup(rule->cfvos[i].type) : NULL;
+        dst->cfvos[i].val     = rule->cfvos[i].val  ? strdup(rule->cfvos[i].val)  : NULL;
+        dst->cfvos[i].rgb     = rule->cfvos[i].rgb;
+        dst->cfvos[i].has_rgb = rule->cfvos[i].has_rgb;
+    }
+    for (uint32_t i = 0; i < rule->color_count; i++)
+        dst->colors[i] = rule->colors[i];
+    /* Deep-copy style overrides */
+    if (rule->font) {
+        dst->font = malloc(sizeof(OxlFontDef));
+        if (dst->font) {
+            *dst->font = *rule->font;
+            dst->font->name = rule->font->name ? strdup(rule->font->name) : NULL;
+        }
+    }
+    if (rule->fill) {
+        dst->fill = malloc(sizeof(OxlFillDef));
+        if (dst->fill) {
+            *dst->fill = *rule->fill;
+            dst->fill->pattern_type = rule->fill->pattern_type ? strdup(rule->fill->pattern_type) : NULL;
+        }
+    }
+    if (rule->border) {
+        dst->border = malloc(sizeof(OxlBorderDef));
+        if (dst->border) {
+            dst->border->left.style     = rule->border->left.style     ? strdup(rule->border->left.style)     : NULL;
+            dst->border->left.color_rgb = rule->border->left.color_rgb;
+            dst->border->left.has_color = rule->border->left.has_color;
+            dst->border->right.style     = rule->border->right.style     ? strdup(rule->border->right.style)     : NULL;
+            dst->border->right.color_rgb = rule->border->right.color_rgb;
+            dst->border->right.has_color = rule->border->right.has_color;
+            dst->border->top.style     = rule->border->top.style     ? strdup(rule->border->top.style)     : NULL;
+            dst->border->top.color_rgb = rule->border->top.color_rgb;
+            dst->border->top.has_color = rule->border->top.has_color;
+            dst->border->bottom.style     = rule->border->bottom.style     ? strdup(rule->border->bottom.style)     : NULL;
+            dst->border->bottom.color_rgb = rule->border->bottom.color_rgb;
+            dst->border->bottom.has_color = rule->border->bottom.has_color;
+            dst->border->diagonal.style     = rule->border->diagonal.style     ? strdup(rule->border->diagonal.style)     : NULL;
+            dst->border->diagonal.color_rgb = rule->border->diagonal.color_rgb;
+            dst->border->diagonal.has_color = rule->border->diagonal.has_color;
+            dst->border->diagonal_up   = rule->border->diagonal_up;
+            dst->border->diagonal_down = rule->border->diagonal_down;
+        }
+    }
     return 0;
 }
 

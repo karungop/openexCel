@@ -30,7 +30,12 @@ typedef struct {
         ST_BORDERS,     /* inside <borders> */
         ST_BORDER,      /* inside <borders><border> */
         ST_CELL_XFS,    /* inside <cellXfs> */
-        ST_XF           /* inside <cellXfs><xf> (for <alignment> child) */
+        ST_XF,          /* inside <cellXfs><xf> (for <alignment> child) */
+        ST_DXFS,        /* inside <dxfs> */
+        ST_DXF,         /* inside <dxfs><dxf> */
+        ST_DXF_FONT,    /* inside <dxfs><dxf><font> */
+        ST_DXF_FILL,    /* inside <dxfs><dxf><fill> */
+        ST_DXF_BORDER   /* inside <dxfs><dxf><border> */
     } state;
     uint32_t    xf_index;
     int         error;
@@ -45,6 +50,15 @@ typedef struct {
     OxlBorderDef  cur_border;
     /* which side is being parsed currently (pointer into cur_border) */
     OxlBorderSide *cur_border_side;
+
+    /* DXF being parsed */
+    OxlFontDef   cur_dxf_font;
+    int          cur_dxf_has_font;
+    OxlFillDef   cur_dxf_fill;
+    int          cur_dxf_has_fill;
+    OxlBorderDef cur_dxf_border;
+    OxlBorderSide *cur_dxf_border_side;
+    int          cur_dxf_has_border;
 
     /* Per-XF data (for cellXfs entries) */
     uint32_t    xf_font_id;
@@ -229,6 +243,102 @@ static void XMLCALL styles_start(void *ud, const char *name, const char **attrs)
 
         /* Transition to ST_XF so we can catch <alignment> child element */
         c->state = ST_XF;
+    /* ── dxfs (Phase 16) ── */
+    } else if (strcmp(name, "dxfs") == 0) {
+        c->state = ST_DXFS;
+    } else if (strcmp(name, "dxf") == 0 && c->state == ST_DXFS) {
+        c->state = ST_DXF;
+        memset(&c->cur_dxf_font, 0, sizeof(c->cur_dxf_font));
+        memset(&c->cur_dxf_fill, 0, sizeof(c->cur_dxf_fill));
+        memset(&c->cur_dxf_border, 0, sizeof(c->cur_dxf_border));
+        c->cur_dxf_border_side = NULL;
+        c->cur_dxf_has_font   = 0;
+        c->cur_dxf_has_fill   = 0;
+        c->cur_dxf_has_border = 0;
+    } else if (strcmp(name, "font") == 0 && c->state == ST_DXF) {
+        c->state = ST_DXF_FONT;
+        memset(&c->cur_dxf_font, 0, sizeof(c->cur_dxf_font));
+    } else if (c->state == ST_DXF_FONT) {
+        if (strcmp(name, "b") == 0) {
+            c->cur_dxf_font.bold = 1;
+        } else if (strcmp(name, "i") == 0) {
+            c->cur_dxf_font.italic = 1;
+        } else if (strcmp(name, "u") == 0) {
+            const char *val = attr(attrs, "val");
+            if (val && strcmp(val, "double") == 0)
+                c->cur_dxf_font.underline = 2;
+            else
+                c->cur_dxf_font.underline = 1;
+        } else if (strcmp(name, "sz") == 0) {
+            const char *val = attr(attrs, "val");
+            if (val) c->cur_dxf_font.size = (float)atof(val);
+        } else if (strcmp(name, "name") == 0) {
+            const char *val = attr(attrs, "val");
+            free(c->cur_dxf_font.name);
+            c->cur_dxf_font.name = safe_strdup(val);
+        } else if (strcmp(name, "color") == 0) {
+            const char *rgb = attr(attrs, "rgb");
+            if (rgb) c->cur_dxf_font.color_rgb = (uint32_t)strtoul(rgb, NULL, 16);
+        }
+    } else if (strcmp(name, "fill") == 0 && c->state == ST_DXF) {
+        c->state = ST_DXF_FILL;
+        memset(&c->cur_dxf_fill, 0, sizeof(c->cur_dxf_fill));
+    } else if (c->state == ST_DXF_FILL) {
+        if (strcmp(name, "patternFill") == 0) {
+            const char *pt = attr(attrs, "patternType");
+            free(c->cur_dxf_fill.pattern_type);
+            c->cur_dxf_fill.pattern_type = safe_strdup(pt ? pt : "solid");
+        } else if (strcmp(name, "fgColor") == 0) {
+            const char *rgb = attr(attrs, "rgb");
+            if (rgb) {
+                c->cur_dxf_fill.fg_rgb = (uint32_t)strtoul(rgb, NULL, 16);
+                c->cur_dxf_fill.fg_has_color = 1;
+            }
+        } else if (strcmp(name, "bgColor") == 0) {
+            const char *rgb = attr(attrs, "rgb");
+            if (rgb) {
+                c->cur_dxf_fill.bg_rgb = (uint32_t)strtoul(rgb, NULL, 16);
+                c->cur_dxf_fill.bg_has_color = 1;
+            }
+        }
+    } else if (strcmp(name, "border") == 0 && c->state == ST_DXF) {
+        c->state = ST_DXF_BORDER;
+        memset(&c->cur_dxf_border, 0, sizeof(c->cur_dxf_border));
+        c->cur_dxf_border_side = NULL;
+        const char *du = attr(attrs, "diagonalUp");
+        const char *dd = attr(attrs, "diagonalDown");
+        if (du && (strcmp(du, "1") == 0 || strcmp(du, "true") == 0))
+            c->cur_dxf_border.diagonal_up = 1;
+        if (dd && (strcmp(dd, "1") == 0 || strcmp(dd, "true") == 0))
+            c->cur_dxf_border.diagonal_down = 1;
+    } else if (c->state == ST_DXF_BORDER) {
+        if (strcmp(name, "left") == 0) {
+            c->cur_dxf_border_side = &c->cur_dxf_border.left;
+            const char *style = attr(attrs, "style");
+            if (style) c->cur_dxf_border_side->style = safe_strdup(style);
+        } else if (strcmp(name, "right") == 0) {
+            c->cur_dxf_border_side = &c->cur_dxf_border.right;
+            const char *style = attr(attrs, "style");
+            if (style) c->cur_dxf_border_side->style = safe_strdup(style);
+        } else if (strcmp(name, "top") == 0) {
+            c->cur_dxf_border_side = &c->cur_dxf_border.top;
+            const char *style = attr(attrs, "style");
+            if (style) c->cur_dxf_border_side->style = safe_strdup(style);
+        } else if (strcmp(name, "bottom") == 0) {
+            c->cur_dxf_border_side = &c->cur_dxf_border.bottom;
+            const char *style = attr(attrs, "style");
+            if (style) c->cur_dxf_border_side->style = safe_strdup(style);
+        } else if (strcmp(name, "diagonal") == 0) {
+            c->cur_dxf_border_side = &c->cur_dxf_border.diagonal;
+            const char *style = attr(attrs, "style");
+            if (style) c->cur_dxf_border_side->style = safe_strdup(style);
+        } else if (strcmp(name, "color") == 0 && c->cur_dxf_border_side != NULL) {
+            const char *rgb = attr(attrs, "rgb");
+            if (rgb) {
+                c->cur_dxf_border_side->color_rgb = (uint32_t)strtoul(rgb, NULL, 16);
+                c->cur_dxf_border_side->has_color = 1;
+            }
+        }
     } else if (strcmp(name, "alignment") == 0 && c->state == ST_XF) {
         /* Parse alignment attributes */
         const char *horiz  = attr(attrs, "horizontal");
@@ -290,6 +400,33 @@ static void XMLCALL styles_end(void *ud, const char *name) {
         c->xf_index++;
         c->state = ST_CELL_XFS;
     } else if (strcmp(name, "cellXfs") == 0) {
+        c->state = ST_NONE;
+    }
+    /* Phase 16: DXF end tags */
+    else if (strcmp(name, "font") == 0 && c->state == ST_DXF_FONT) {
+        c->cur_dxf_has_font = 1;
+        c->state = ST_DXF;
+    } else if (strcmp(name, "fill") == 0 && c->state == ST_DXF_FILL) {
+        c->cur_dxf_has_fill = 1;
+        c->state = ST_DXF;
+    } else if ((strcmp(name, "left") == 0 || strcmp(name, "right") == 0 ||
+                strcmp(name, "top") == 0  || strcmp(name, "bottom") == 0 ||
+                strcmp(name, "diagonal") == 0) && c->state == ST_DXF_BORDER) {
+        c->cur_dxf_border_side = NULL;
+    } else if (strcmp(name, "border") == 0 && c->state == ST_DXF_BORDER) {
+        c->cur_dxf_has_border = 1;
+        c->state = ST_DXF;
+    } else if (strcmp(name, "dxf") == 0 && c->state == ST_DXF) {
+        oxl_styles_add_dxf(c->styles,
+                            c->cur_dxf_has_font   ? &c->cur_dxf_font   : NULL,
+                            c->cur_dxf_has_fill   ? &c->cur_dxf_fill   : NULL,
+                            c->cur_dxf_has_border ? &c->cur_dxf_border : NULL);
+        /* Free accumulated fields */
+        oxl_font_def_free_fields(&c->cur_dxf_font);
+        oxl_fill_def_free_fields(&c->cur_dxf_fill);
+        oxl_border_def_free_fields(&c->cur_dxf_border);
+        c->state = ST_DXFS;
+    } else if (strcmp(name, "dxfs") == 0 && c->state == ST_DXFS) {
         c->state = ST_NONE;
     }
 }

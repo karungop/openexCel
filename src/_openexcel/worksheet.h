@@ -57,6 +57,49 @@ typedef struct {
     uint8_t  has_protection;
 } OxlSheetProtection;
 
+/* Phase 16: Conditional Formatting */
+
+typedef struct {
+    char    *type;    /* "min","max","num","percent","percentile","formula" */
+    char    *val;     /* threshold value string; NULL for min/max */
+    uint32_t rgb;     /* ARGB color */
+    uint8_t  has_rgb;
+} OxlCfvo;
+
+typedef struct {
+    char    *type;       /* "cellIs","expression","colorScale","dataBar","top10","aboveAverage",
+                            "containsText","notContainsText","beginsWith","endsWith",
+                            "duplicateValues","uniqueValues" */
+    char    *operator_;  /* for cellIs: "greaterThan","lessThan","equal","notEqual","between","notBetween",
+                            "greaterThanOrEqual","lessThanOrEqual" */
+    char    *formula;    /* formula1 / threshold */
+    char    *formula2;   /* for between/notBetween */
+    char    *text;       /* for text-based rules */
+    int32_t  priority;   /* 1 = highest */
+    uint8_t  stop_if_true;
+    OxlFontDef  *font;   /* NULL if no font override */
+    OxlFillDef  *fill;   /* NULL if no fill override */
+    OxlBorderDef *border;/* NULL if no border override */
+    int32_t  dxf_id;     /* -1 = unset */
+    uint8_t  top10_top;
+    uint8_t  top10_percent;
+    uint32_t top10_rank;
+    uint8_t  above_avg;
+    uint8_t  equal_avg;
+    OxlCfvo  cfvos[3];
+    uint32_t cfvo_count;
+    uint32_t colors[3];  /* ARGB */
+    uint32_t color_count;
+    uint8_t  data_bar_show_value;
+} OxlCfRule;
+
+typedef struct {
+    char      *sqref;
+    OxlCfRule *rules;
+    uint32_t   rule_count;
+    uint32_t   rule_cap;
+} OxlCf;
+
 /* Phase 13: Data Validation */
 
 typedef struct {
@@ -226,6 +269,11 @@ int oxl_worksheet_add_merge(OxlWorksheet *ws, uint32_t min_row, uint16_t min_col
 /* Phase 13: Data Validation helpers */
 void oxl_data_validation_free_fields(OxlDataValidation *dv);
 int  oxl_worksheet_add_data_validation(OxlWorksheet *ws, const OxlDataValidation *dv);
+
+/* Phase 16: Conditional Formatting helpers */
+void oxl_cfvo_free_fields(OxlCfvo *v);
+void oxl_cf_rule_free_fields(OxlCfRule *rule);
+int  oxl_worksheet_add_cf_rule(OxlWorksheet *ws, const char *sqref, const OxlCfRule *rule);
 
 /* Phase 14: no extra helper functions needed — fields are embedded structs */
 

@@ -33,6 +33,12 @@ typedef enum {
     SS_PAGE_SETUP,         /* inside <pageSetup> — attributes only */
     /* Phase 15: sheet protection */
     SS_SHEET_PROTECTION,   /* inside <sheetProtection> — attributes only */
+    /* Phase 16: conditional formatting */
+    SS_COND_FMT,           /* inside <conditionalFormatting> */
+    SS_CF_RULE,            /* inside <cfRule> */
+    SS_CF_FORMULA,         /* inside <formula> inside <cfRule> */
+    SS_CF_COLOR_SCALE,     /* inside <colorScale> */
+    SS_CF_DATA_BAR,        /* inside <dataBar> */
 } SheetState;
 
 #define CBUF_STACK 512
@@ -69,6 +75,12 @@ typedef struct {
     /* Phase 13: data validation accumulator */
     OxlDataValidation cur_dv;
     int               cur_dv_formula_slot; /* 1 = formula1, 2 = formula2 */
+    /* Phase 16: conditional formatting accumulator */
+    OxlCfRule    cur_cf_rule;
+    char         cur_cf_sqref[256];
+    int          cur_cf_formula_slot; /* 1 = formula, 2 = formula2 */
+    int          cur_cf_in_color_scale;
+    int          cur_cf_in_data_bar;
 } SheetCtx;
 
 /* Parse "B5" → row=4, col=1 */
@@ -314,6 +326,17 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
                 c->ws->page_setup.has_setup = 1;
             c->state = SS_PAGE_SETUP;
         }
+        /* Phase 16: conditional formatting */
+        else if (strcmp(name, "conditionalFormatting") == 0) {
+            const char *sqref_s = attr(attrs, "sqref");
+            if (sqref_s) {
+                strncpy(c->cur_cf_sqref, sqref_s, sizeof(c->cur_cf_sqref) - 1);
+                c->cur_cf_sqref[sizeof(c->cur_cf_sqref) - 1] = '\0';
+            } else {
+                c->cur_cf_sqref[0] = '\0';
+            }
+            c->state = SS_COND_FMT;
+        }
         /* Phase 15: sheet protection */
         else if (strcmp(name, "sheetProtection") == 0) {
             OxlSheetProtection *p = &c->ws->protection;
@@ -536,6 +559,90 @@ static void XMLCALL sheet_start(void *ud, const char *name, const char **attrs) 
         }
         break;
 
+    /* Phase 16: conditional formatting */
+    case SS_COND_FMT:
+        if (strcmp(name, "cfRule") == 0) {
+            memset(&c->cur_cf_rule, 0, sizeof(c->cur_cf_rule));
+            c->cur_cf_rule.dxf_id = -1;
+            c->cur_cf_in_color_scale = 0;
+            c->cur_cf_in_data_bar = 0;
+            const char *type_s  = attr(attrs, "type");
+            const char *op_s    = attr(attrs, "operator");
+            const char *pri_s   = attr(attrs, "priority");
+            const char *dxf_s   = attr(attrs, "dxfId");
+            const char *text_s  = attr(attrs, "text");
+            const char *sit_s   = attr(attrs, "stopIfTrue");
+            const char *rank_s  = attr(attrs, "rank");
+            const char *top_s   = attr(attrs, "top");
+            const char *pct_s   = attr(attrs, "percent");
+            const char *aa_s    = attr(attrs, "aboveAverage");
+            const char *ea_s    = attr(attrs, "equalAverage");
+            if (type_s)  c->cur_cf_rule.type      = strdup(type_s);
+            if (op_s)    c->cur_cf_rule.operator_  = strdup(op_s);
+            if (text_s)  c->cur_cf_rule.text       = strdup(text_s);
+            if (pri_s)   c->cur_cf_rule.priority   = atoi(pri_s);
+            if (dxf_s)   c->cur_cf_rule.dxf_id    = atoi(dxf_s);
+            if (sit_s && (strcmp(sit_s, "1") == 0 || strcmp(sit_s, "true") == 0))
+                c->cur_cf_rule.stop_if_true = 1;
+            if (rank_s)  c->cur_cf_rule.top10_rank    = (uint32_t)atoi(rank_s);
+            if (top_s && (strcmp(top_s, "0") != 0))
+                c->cur_cf_rule.top10_top = 1;
+            else if (!top_s)
+                c->cur_cf_rule.top10_top = 1; /* default: top */
+            if (pct_s && (strcmp(pct_s, "1") == 0 || strcmp(pct_s, "true") == 0))
+                c->cur_cf_rule.top10_percent = 1;
+            /* aboveAverage: default=1 (above), explicit "0" means below */
+            if (aa_s && strcmp(aa_s, "0") == 0)
+                c->cur_cf_rule.above_avg = 0;
+            else
+                c->cur_cf_rule.above_avg = 1;
+            if (ea_s && (strcmp(ea_s, "1") == 0 || strcmp(ea_s, "true") == 0))
+                c->cur_cf_rule.equal_avg = 1;
+            c->state = SS_CF_RULE;
+        }
+        break;
+
+    case SS_CF_RULE:
+        if (strcmp(name, "formula") == 0) {
+            cbuf_reset(c);
+            c->cur_cf_formula_slot = (c->cur_cf_rule.formula == NULL) ? 1 : 2;
+            c->state = SS_CF_FORMULA;
+        } else if (strcmp(name, "colorScale") == 0) {
+            c->cur_cf_in_color_scale = 1;
+            c->state = SS_CF_COLOR_SCALE;
+        } else if (strcmp(name, "dataBar") == 0) {
+            c->cur_cf_in_data_bar = 1;
+            c->state = SS_CF_DATA_BAR;
+        }
+        break;
+
+    case SS_CF_FORMULA:
+        /* no children expected */
+        break;
+
+    case SS_CF_COLOR_SCALE:
+    case SS_CF_DATA_BAR:
+        if (strcmp(name, "cfvo") == 0) {
+            if (c->cur_cf_rule.cfvo_count < 3) {
+                uint32_t idx = c->cur_cf_rule.cfvo_count++;
+                const char *type_s = attr(attrs, "type");
+                const char *val_s  = attr(attrs, "val");
+                c->cur_cf_rule.cfvos[idx].type    = type_s ? strdup(type_s) : NULL;
+                c->cur_cf_rule.cfvos[idx].val     = val_s  ? strdup(val_s)  : NULL;
+                c->cur_cf_rule.cfvos[idx].has_rgb = 0;
+                c->cur_cf_rule.cfvos[idx].rgb     = 0;
+            }
+        } else if (strcmp(name, "color") == 0) {
+            if (c->cur_cf_rule.color_count < 3) {
+                const char *rgb_s = attr(attrs, "rgb");
+                if (rgb_s) {
+                    c->cur_cf_rule.colors[c->cur_cf_rule.color_count++] =
+                        (uint32_t)strtoul(rgb_s, NULL, 16);
+                }
+            }
+        }
+        break;
+
     default:
         break;
     }
@@ -611,11 +718,83 @@ static void XMLCALL sheet_end(void *ud, const char *name) {
     else if (strcmp(name, "sheetProtection") == 0 && c->state == SS_SHEET_PROTECTION) {
         c->state = SS_NONE;
     }
+    /* Phase 16: conditional formatting end */
+    else if (strcmp(name, "formula") == 0 && c->state == SS_CF_FORMULA) {
+        if (c->cur_cf_formula_slot == 1) {
+            free(c->cur_cf_rule.formula);
+            c->cur_cf_rule.formula = c->cbuf_len > 0 ? strndup(c->cbuf, c->cbuf_len) : NULL;
+        } else {
+            free(c->cur_cf_rule.formula2);
+            c->cur_cf_rule.formula2 = c->cbuf_len > 0 ? strndup(c->cbuf, c->cbuf_len) : NULL;
+        }
+        c->state = SS_CF_RULE;
+    }
+    else if (strcmp(name, "colorScale") == 0 && c->state == SS_CF_COLOR_SCALE) {
+        c->cur_cf_in_color_scale = 0;
+        c->state = SS_CF_RULE;
+    }
+    else if (strcmp(name, "dataBar") == 0 && c->state == SS_CF_DATA_BAR) {
+        c->cur_cf_in_data_bar = 0;
+        c->state = SS_CF_RULE;
+    }
+    else if (strcmp(name, "cfRule") == 0 && c->state == SS_CF_RULE) {
+        /* Look up DXF if dxf_id >= 0 */
+        if (c->cur_cf_rule.dxf_id >= 0) {
+            const OxlDxf *dxf = oxl_styles_get_dxf(&c->wb->styles,
+                                                     (uint32_t)c->cur_cf_rule.dxf_id);
+            if (dxf) {
+                if (dxf->font && !c->cur_cf_rule.font) {
+                    c->cur_cf_rule.font = malloc(sizeof(OxlFontDef));
+                    if (c->cur_cf_rule.font) {
+                        *c->cur_cf_rule.font = *dxf->font;
+                        c->cur_cf_rule.font->name = dxf->font->name ? strdup(dxf->font->name) : NULL;
+                    }
+                }
+                if (dxf->fill && !c->cur_cf_rule.fill) {
+                    c->cur_cf_rule.fill = malloc(sizeof(OxlFillDef));
+                    if (c->cur_cf_rule.fill) {
+                        *c->cur_cf_rule.fill = *dxf->fill;
+                        c->cur_cf_rule.fill->pattern_type = dxf->fill->pattern_type ? strdup(dxf->fill->pattern_type) : NULL;
+                    }
+                }
+                if (dxf->border && !c->cur_cf_rule.border) {
+                    c->cur_cf_rule.border = malloc(sizeof(OxlBorderDef));
+                    if (c->cur_cf_rule.border) {
+                        c->cur_cf_rule.border->left.style     = dxf->border->left.style     ? strdup(dxf->border->left.style)     : NULL;
+                        c->cur_cf_rule.border->left.color_rgb = dxf->border->left.color_rgb;
+                        c->cur_cf_rule.border->left.has_color = dxf->border->left.has_color;
+                        c->cur_cf_rule.border->right.style     = dxf->border->right.style     ? strdup(dxf->border->right.style)     : NULL;
+                        c->cur_cf_rule.border->right.color_rgb = dxf->border->right.color_rgb;
+                        c->cur_cf_rule.border->right.has_color = dxf->border->right.has_color;
+                        c->cur_cf_rule.border->top.style     = dxf->border->top.style     ? strdup(dxf->border->top.style)     : NULL;
+                        c->cur_cf_rule.border->top.color_rgb = dxf->border->top.color_rgb;
+                        c->cur_cf_rule.border->top.has_color = dxf->border->top.has_color;
+                        c->cur_cf_rule.border->bottom.style     = dxf->border->bottom.style     ? strdup(dxf->border->bottom.style)     : NULL;
+                        c->cur_cf_rule.border->bottom.color_rgb = dxf->border->bottom.color_rgb;
+                        c->cur_cf_rule.border->bottom.has_color = dxf->border->bottom.has_color;
+                        c->cur_cf_rule.border->diagonal.style     = dxf->border->diagonal.style     ? strdup(dxf->border->diagonal.style)     : NULL;
+                        c->cur_cf_rule.border->diagonal.color_rgb = dxf->border->diagonal.color_rgb;
+                        c->cur_cf_rule.border->diagonal.has_color = dxf->border->diagonal.has_color;
+                        c->cur_cf_rule.border->diagonal_up   = dxf->border->diagonal_up;
+                        c->cur_cf_rule.border->diagonal_down = dxf->border->diagonal_down;
+                    }
+                }
+            }
+        }
+        oxl_worksheet_add_cf_rule(c->ws, c->cur_cf_sqref, &c->cur_cf_rule);
+        oxl_cf_rule_free_fields(&c->cur_cf_rule);
+        memset(&c->cur_cf_rule, 0, sizeof(c->cur_cf_rule));
+        c->state = SS_COND_FMT;
+    }
+    else if (strcmp(name, "conditionalFormatting") == 0 && c->state == SS_COND_FMT) {
+        c->state = SS_NONE;
+    }
 }
 
 static void XMLCALL sheet_char(void *ud, const char *s, int n) {
     SheetCtx *c = ud;
-    if (c->state == SS_VALUE || c->state == SS_INLINE_T || c->state == SS_DV_FORMULA) {
+    if (c->state == SS_VALUE || c->state == SS_INLINE_T || c->state == SS_DV_FORMULA ||
+        c->state == SS_CF_FORMULA) {
         cbuf_append(c, s, n);
     } else if (c->state == SS_FORMULA) {
         formula_buf_append(c, s, n);
