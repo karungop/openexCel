@@ -7,6 +7,7 @@ from ._openexcel import (
     Border,
     Alignment,
     DataValidation,
+    SheetProtection,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "Border",
     "Alignment",
     "DataValidation",
+    "SheetProtection",
 ]
