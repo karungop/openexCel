@@ -55,6 +55,11 @@ void oxl_worksheet_free(OxlWorksheet *ws) {
     free(ws->data_validations);
     /* Phase 14: page setup orientation is heap-allocated */
     free(ws->page_setup.orientation);
+    /* Phase 15: sheet protection string fields */
+    free(ws->protection.password_hash);
+    free(ws->protection.algorithm_name);
+    free(ws->protection.hash_value);
+    free(ws->protection.salt_value);
     free(ws);
 }
 

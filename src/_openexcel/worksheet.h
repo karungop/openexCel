@@ -29,6 +29,33 @@ typedef struct {
     uint16_t max_col;  /* 1-based */
 } OxlMergedCell;
 
+/* Phase 15: Sheet Protection */
+
+typedef struct {
+    char    *password_hash;
+    char    *algorithm_name;
+    char    *hash_value;
+    char    *salt_value;
+    uint32_t spin_count;
+    uint8_t  sheet;
+    uint8_t  objects;
+    uint8_t  scenarios;
+    uint8_t  format_cells;
+    uint8_t  format_columns;
+    uint8_t  format_rows;
+    uint8_t  insert_columns;
+    uint8_t  insert_rows;
+    uint8_t  insert_hyperlinks;
+    uint8_t  delete_columns;
+    uint8_t  delete_rows;
+    uint8_t  select_locked;
+    uint8_t  sort;
+    uint8_t  auto_filter;
+    uint8_t  pivot_tables;
+    uint8_t  select_unlocked;
+    uint8_t  has_protection;
+} OxlSheetProtection;
+
 /* Phase 13: Data Validation */
 
 typedef struct {
@@ -122,6 +149,9 @@ typedef struct {
     OxlPageSetup    page_setup;
     OxlPageMargins  page_margins;
     OxlPrintOptions print_options;
+
+    /* Phase 15: Sheet Protection */
+    OxlSheetProtection protection;
 } OxlWorksheet;
 
 OxlWorksheet *oxl_worksheet_new(const char *name, const char *rel_path);

@@ -1272,6 +1272,10 @@ static PyObject *pagesetup_new(PyTypeObject *type, PyObject *args, PyObject *kw)
         self->fit_to_width = 0;
         self->fit_to_height = 0;
         self->fit_to_page  = 0;
+    }
+    return (PyObject *)self;
+}
+
 /* ---- PyXlSheetProtectionObject ---- */
 
 typedef struct {
@@ -1542,6 +1546,10 @@ static PyTypeObject PyXlPrintOptionsType = {
     .tp_new       = printoptions_new,
     .tp_init      = (initproc)printoptions_init,
     .tp_getset    = printoptions_getset,
+};
+
+/* ========== Phase 15: SheetProtection type ========== */
+
 static int sp_init(PyXlSheetProtectionObject *self, PyObject *args, PyObject *kw) {
     static char *kwlist[] = {
         "sheet", "password", "objects", "scenarios",
@@ -2714,6 +2722,9 @@ static int ws_set_print_options(PyObject *self, PyObject *value, void *Py_UNUSED
     ws->print_options.horizontal_centered = (uint8_t)(po->horizontal_centered ? 1 : 0);
     ws->print_options.vertical_centered   = (uint8_t)(po->vertical_centered ? 1 : 0);
     ws->print_options.has_options         = 1;
+    return 0;
+}
+
 /* ── Phase 15: Sheet protection ──────────────────────────────────────────── */
 
 static PyObject *ws_get_protection(PyObject *self, void *closure) {
@@ -3171,7 +3182,9 @@ PyMODINIT_FUNC PyInit__openexcel(void) {
     Py_INCREF(&PyXlPrintOptionsType);
     if (PyModule_AddObject(mod, "PrintOptions", (PyObject *)&PyXlPrintOptionsType) < 0) {
         Py_DECREF(&PyXlPrintOptionsType); Py_DECREF(mod); return NULL;
-Py_INCREF(&PyXlSheetProtectionType);
+    }
+
+    Py_INCREF(&PyXlSheetProtectionType);
     if (PyModule_AddObject(mod, "SheetProtection", (PyObject *)&PyXlSheetProtectionType) < 0) {
         Py_DECREF(&PyXlSheetProtectionType); Py_DECREF(mod); return NULL;
     }
